@@ -6,6 +6,7 @@
 
 - [Getting started](getting-started.md)
 - [Concepts](concepts.md)
+- [Mathematical Invariants](mathematical-invariants3.md)
 - [Task lifecycle](lifecycle.md)
 - [REST API](api.md)
 - [Configuration](configuration.md)
