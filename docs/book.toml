@@ -1,0 +1,17 @@
+[book]
+title = "Equalix Developer Documentation"
+authors = ["Andrei Minin"]
+description = "Developer guide, architecture, API and samples for the Equalix fair scheduler"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/equalix/"
+git-repository-url = "https://github.com/andreminin/equalix"
+edit-url-template = "https://github.com/andreminin/equalix/edit/main/docs/{path}"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+fold.enable = true

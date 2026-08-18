@@ -1,0 +1,75 @@
+spring:
+  task:
+    scheduling:
+      enabled: false
+  datasource:
+    url: jdbc:tc:postgresql:16:///equalix
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers:localhost:9092}
+    listener:
+      ack-mode: manual_immediate
+      auto-startup: false
+    consumer:
+      group-id: equalix-ingestion
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+app:
+  security:
+    api-key: test-api-key
+  executor:
+    base-url: http://localhost:9999
+    connect-timeout-ms: 1000
+    read-timeout-ms: 1000
+  kafka:
+    topics:
+      ingestion: equalix-tasks-test
+  queue:
+    max-tasks-in-process: 100
+    max-per-client-quota: 10
+    priority-calc-interval: 100
+    dispatcher-interval: 50
+    worker-poll-size: 10
+    max-queued-time-ms: 60000
+    task-timeout-ms: 300000
+    max-payload-bytes: 1048576
+    cms:
+      mode: local
+      width: 1024
+      depth: 3
+    sequential:
+      enabled: true
+      client-block-timeout-ms: 10000
+      dispatcher-interval: 50
+      block-recovery-interval: 1000
+      result-passthrough-interval: 1000
+  adaptive-rps:
+    enabled: false
+    initial-rps: 10
+    min-rps: 1
+    max-rps: 100
+    target-latency-ms: 200
+    error-threshold: 0.05
+    latency-threshold: 0.2
+    window-size: 100
+    min-samples: 10
+    emergency-factor: 0.5
+    decrease-factor: 0.9
+    increase-factor: 1.05
+    increase-error-threshold: 0.01
+  watchdog:
+    interval-minutes: 60
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus

@@ -1,0 +1,116 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/equalix}
+    username: ${SPRING_DATASOURCE_USERNAME:equalix}
+    password: ${SPRING_DATASOURCE_PASSWORD:equalix}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: localhost:9092
+    listener:
+      ack-mode: manual_immediate
+    consumer:
+      group-id: equalix-ingestion
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+
+app:
+  security:
+    api-key: ${EQUALIX_API_KEY:changeme}
+  executor:
+    base-url: http://localhost:9090
+    connect-timeout-ms: 2000
+    read-timeout-ms: 5000
+  kafka:
+    topics:
+      ingestion: equalix-tasks
+  queue:
+    max-tasks-in-process: 5000
+    max-per-client-quota: 500
+    priority-calc-interval: 100
+    dispatcher-interval: 50
+    worker-poll-size: 100
+    max-queued-time-ms: 60000
+    task-timeout-ms: 300000
+    max-payload-bytes: 1048576
+    cms:
+      mode: local
+      width: 65536
+      depth: 5
+      redis:
+        key-namespace: equalix:cms
+        fallback-to-local: true
+    sequential:
+      enabled: true
+      client-block-timeout-ms: 60000
+      dispatcher-interval: 50
+      block-recovery-interval: 10000
+      result-passthrough-interval: 60000
+  adaptive-rps:
+    # Enable or disable the adaptive RPS controller entirely.
+    # When disabled, recordCompletion() silently skips recording and clears any existing window.
+    enabled: true
+    # Initial allowed requests per second (RPS) – the starting value before any adaptation.
+    initial-rps: 1
+    # Minimum allowed RPS – the absolute floor to prevent the controller from dropping too low.
+    # The controller will never set current RPS below this value.
+    min-rps: 1
+    # Maximum allowed RPS – the absolute ceiling to cap aggressive increases.
+    # The controller will never exceed this value.
+    max-rps: 100
+    # Target latency in milliseconds for remote calls. The controller compares the
+    # average latency from the sliding window against this target to decide adjustments.
+    target-latency-ms: 200
+    # Threshold fraction defining the "dead band" around the target latency.
+    # If avgLatency > target * (1 + latencyThreshold) - decrease RPS.
+    # If avgLatency < target * (1 - latencyThreshold) - increase RPS (provided error rate is low).
+    latency-threshold: 0.2
+    # Error rate threshold (as a fraction of failed completions in the window).
+    # When the observed error rate exceeds this value, the controller triggers an
+    # emergency brake – multiplying current RPS by emergency-factor.
+    error-threshold: 0.05
+    # Size of the sliding window – number of recent completion records kept for analysis.
+    window-size: 100
+    # Minimum number of samples required in the window before any adjustment is performed.
+    # Prevents premature reactions during cold start or after long idle periods.
+    min-samples: 10
+    # Factor applied to current RPS when the emergency brake is triggered.
+    # Typical value: 0.5 - halves the RPS immediately.
+    emergency-factor: 0.5
+    # Factor applied to current RPS when latency is too high (above target + threshold).
+    # Typical value: 0.9 - a gradual 10% decrease.
+    decrease-factor: 0.9
+
+    # Factor applied to current RPS when latency is low and error rate is below
+    # increase-error-threshold. Typical value: 1.05 → a cautious 5% increase.
+    increase-factor: 1.05
+
+    # Maximum error rate (fraction) allowed for the RPS to increase.
+    # If the observed error rate is equal to or greater than this value,
+    # the controller will not increase RPS even if latency is low.
+    increase-error-threshold: 0.01
+  watchdog:
+    interval-minutes: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    export:
+      prometheus:
+        enabled: true
