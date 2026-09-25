@@ -93,6 +93,7 @@ app:
     error-threshold: 0.05
   watchdog:
     interval-minutes: 5
+    drift-metric-max-keys: 100         # per-key drift series exported per run
 ```
 
 `penaltyFactor = 1000 / currentRps`. Dispatcher tick budget is `ceil(currentRps × dispatcher-interval / 1000)` when enabled.

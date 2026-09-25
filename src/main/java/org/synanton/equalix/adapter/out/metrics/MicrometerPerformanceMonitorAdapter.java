@@ -5,16 +5,32 @@ import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.stereotype.Component;
+import org.synanton.equalix.domain.model.CmsDriftReport;
 import org.synanton.equalix.domain.port.out.PerformanceMonitorPort;
 import org.synanton.equalix.domain.service.AdaptiveRpsController;
 
 @Component
 public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPort {
 
+    private static final String DRIFT = "equalix.cms.estimation.drift";
+
     private final MeterRegistry meterRegistry;
     private final AdaptiveRpsController adaptiveRpsController;
+
+    // Gauges hold weak references to their state, so every value object is kept here.
+    private final Map<String, DriftGauge> driftGauges = new HashMap<>();
+    private final AtomicLong driftMax = new AtomicLong();
+    private final AtomicLong driftMin = new AtomicLong();
+    private final AtomicLong driftAbsoluteTotal = new AtomicLong();
+    private final AtomicLong driftKeys = new AtomicLong();
+    private final AtomicLong driftKeysSampled = new AtomicLong();
+    private final AtomicLong driftMeasuredAtEpochSecond = new AtomicLong();
 
     public MicrometerPerformanceMonitorAdapter(
         MeterRegistry meterRegistry,
@@ -23,6 +39,18 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
         this.meterRegistry = meterRegistry;
         this.adaptiveRpsController = adaptiveRpsController;
         Gauge.builder("equalix.adaptive.rps", adaptiveRpsController, AdaptiveRpsController::getCurrentRps)
+            .register(meterRegistry);
+        registerDriftAggregate(DRIFT + ".max", driftMax, "Largest CMS overestimate at the last watchdog run");
+        registerDriftAggregate(DRIFT + ".min", driftMin,
+            "Largest CMS underestimate (negative) at the last watchdog run");
+        registerDriftAggregate(DRIFT + ".absolute.total", driftAbsoluteTotal,
+            "Sum of |drift| over all sampled keys at the last watchdog run");
+        registerDriftAggregate(DRIFT + ".keys", driftKeys, "Keys with non-zero CMS drift at the last watchdog run");
+        registerDriftAggregate(DRIFT + ".keys.sampled", driftKeysSampled,
+            "Keys compared with the task table at the last watchdog run");
+        Gauge.builder(DRIFT + ".timestamp", driftMeasuredAtEpochSecond, AtomicLong::get)
+            .description("Epoch second of the last watchdog drift measurement on this instance")
+            .baseUnit("seconds")
             .register(meterRegistry);
     }
 
@@ -60,5 +88,49 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
             .publishPercentiles(0.5, 0.95, 0.99)
             .register(meterRegistry)
             .record(Math.abs(error));
+    }
+
+    /**
+     * Sets {@code equalix.cms.estimation.drift{fairnessKey}} for the reported keys and removes the series of keys
+     * that are no longer reported, so a key that stops drifting disappears instead of keeping a stale value.
+     */
+    @Override
+    public synchronized void publishCmsDrift(CmsDriftReport report) {
+        Map<String, Long> reported = report.topDrifting();
+        Iterator<Map.Entry<String, DriftGauge>> existing = driftGauges.entrySet().iterator();
+        while (existing.hasNext()) {
+            Map.Entry<String, DriftGauge> entry = existing.next();
+            if (!reported.containsKey(entry.getKey())) {
+                meterRegistry.remove(entry.getValue().gauge());
+                existing.remove();
+            }
+        }
+        reported.forEach((fairnessKey, drift) ->
+            driftGauges.computeIfAbsent(fairnessKey, this::registerDriftGauge).value().set(drift));
+
+        driftMax.set(report.maxDrift());
+        driftMin.set(report.minDrift());
+        driftAbsoluteTotal.set(report.absoluteDriftTotal());
+        driftKeys.set(report.keysDrifting());
+        driftKeysSampled.set(report.keysSampled());
+        driftMeasuredAtEpochSecond.set(report.measuredAt().getEpochSecond());
+    }
+
+    private DriftGauge registerDriftGauge(String fairnessKey) {
+        AtomicLong value = new AtomicLong();
+        Gauge gauge = Gauge.builder(DRIFT, value, AtomicLong::get)
+            .description("CMS estimate minus in-flight tasks per fairness key at the last watchdog run")
+            .tag("fairnessKey", fairnessKey)
+            .register(meterRegistry);
+        return new DriftGauge(gauge, value);
+    }
+
+    private void registerDriftAggregate(String name, AtomicLong value, String description) {
+        Gauge.builder(name, value, AtomicLong::get)
+            .description(description)
+            .register(meterRegistry);
+    }
+
+    private record DriftGauge(Gauge gauge, AtomicLong value) {
     }
 }

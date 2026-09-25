@@ -168,7 +168,13 @@ counts.
 app:
   watchdog:
     interval-minutes: 5               # Reconciliation cadence
+    drift-metric-max-keys: 100        # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run
 ```
+
+On every run, just before it rebuilds the CMS, the watchdog measures `drift_k = CMS estimate − in-flight
+tasks` for every tracked key. Only keys with non-zero drift are exported per key, largest `|drift|` first
+and capped at `drift-metric-max-keys`. This bounds Prometheus series cardinality. The aggregate gauges always
+cover every key. See [operations](src/operations.md#cms-drift-eqx-5).
 
 ## Kafka (optional ingestion path)
 

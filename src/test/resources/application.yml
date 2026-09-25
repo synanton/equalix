@@ -86,6 +86,8 @@ app:
     increase-error-threshold: 0.01
   watchdog:
     interval-minutes: 60
+    # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).
+    drift-metric-max-keys: 100
 
 management:
   endpoints:

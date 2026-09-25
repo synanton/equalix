@@ -3,6 +3,7 @@ package org.synanton.equalix.domain.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,5 +57,16 @@ class CmsErrorRecorderTest {
 
         assertThat(recorder.sample().count()).isZero();
         verifyNoInteractions(cms, performanceMonitor);
+    }
+
+    @Test
+    void shouldMeasureDriftOfTrackedKeysAgainstGivenInFlightCounts() {
+        when(cms.estimateCount("busy")).thenReturn(3L);
+        when(cms.estimateCount("idle")).thenReturn(2L);
+
+        Map<String, Long> drift = recorder.measureDrift(Map.of("busy", 3), List.of("busy", "idle"));
+
+        assertThat(drift).isEqualTo(Map.of("busy", 0L, "idle", 2L));
+        verifyNoInteractions(taskRepository, clientCounts, performanceMonitor);
     }
 }

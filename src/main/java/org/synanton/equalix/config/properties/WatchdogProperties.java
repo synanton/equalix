@@ -9,4 +9,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class WatchdogProperties {
 
     private long intervalMinutes;
+
+    /**
+     * Maximum number of fairness keys exported as {@code equalix.cms.estimation.drift{fairnessKey}} per run,
+     * largest {@code |drift|} first. Bounds Prometheus series cardinality; aggregates always cover every key.
+     */
+    private int driftMetricMaxKeys;
 }
