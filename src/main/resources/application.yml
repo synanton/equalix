@@ -25,6 +25,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
 
 app:
+  scheduling:
+    # Runs the priority calculator, dispatchers, watchdog and recovery jobs.
+    enabled: true
   security:
     api-key: ${EQUALIX_API_KEY:changeme}
   executor:

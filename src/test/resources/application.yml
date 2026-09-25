@@ -1,7 +1,4 @@
 spring:
-  task:
-    scheduling:
-      enabled: false
   datasource:
     url: jdbc:tc:postgresql:16:///equalix
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
@@ -23,6 +20,8 @@ spring:
       enable-auto-commit: false
 
 app:
+  scheduling:
+    enabled: false
   security:
     api-key: test-api-key
   executor:
