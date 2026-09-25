@@ -27,7 +27,17 @@ This is the recovery path after crashes and missed webhooks.
 
 ## Metrics and logs
 
-Scrape `/actuator/prometheus` with `X-API-Key`. Use `equalix.adaptive.rps` and `equalix.task.duration` for dashboards. Logs are `@Slf4j` at scheduler and adapter boundaries; there is no request correlation id yet.
+Scrape `/actuator/prometheus` with `X-API-Key`. Use `equalix.adaptive.rps` and `equalix.task.duration` for dashboards.
+
+### CMS accuracy during load tests
+
+Set `app.queue.cms.error-sampling.enabled=true` to sample e_k = CMS estimate − in-flight tasks for every tracked key every `interval-ms`. Metrics:
+
+- `equalix_cms_estimation_error_count{direction="over|under|exact"}`: over- and underestimation frequencies.
+- `equalix_cms_estimation_error_sum` / `_max` by direction: mean and worst error in each direction.
+- `equalix_cms_estimation_error_magnitude{quantile="0.5|0.95|0.99"}`: percentiles of ∣e_k∣.
+
+With the default 65536×5 sketch and exact accounting, e_k should be 0. Sustained non-zero error, especially `direction="under"`, points to an accounting fault (a rolled-back transaction after a CMS update) or to fairness keys whose `String.hashCode()` values collide. See [mathematical invariants §20](mathematical-invariants3.md). Logs are `@Slf4j` at scheduler and adapter boundaries; there is no request correlation id yet.
 
 ## Kafka consumer
 

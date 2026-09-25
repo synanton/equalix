@@ -31,6 +31,19 @@ mvn test -Dtest=ProportionalFairnessIntegrationTest
 
 `AgingSimulationTest` is a domain-level simulation in simulated seconds, using the production `VirtualTimeService` and `AgingService`. For every aging policy, it compares long-wait promotion during a structural backlog with short-term weighted shares. `AgingIntegrationTest` checks the dispatcher's candidate pool against PostgreSQL.
 
+## CMS error experiment (EQX-2)
+
+- `CmsSignedUpdateErrorExperimentTest` measures the distribution of e_k over one watchdog window, for two sketch sizes and 1k/10k/50k keys, with and without injected accounting faults. It writes CSVs to `target/eqx-2/`.
+- `CmsErrorPropagationTest` validates the §17 priority-error bound through `PriorityCalculatorService`.
+- `CmsErrorRecorderIntegrationTest` checks the recorder and the Prometheus metrics end to end. It needs `@AutoConfigureObservability`, because Spring Boot disables metrics export in tests.
+
+To regenerate the charts in `docs/src/images/eqx-2/` (requires matplotlib):
+
+```bash
+mvn test -Dtest=CmsSigntedUpdateErrorExperimentTes
+python3 docs/samples/plot_cms_error.py
+```
+
 Integration tests get an `AdjustableClock` (from `BaseIntegrationTest`). It is frozen at context start and reset before each test. Call `clock.advance(...)` to make tasks age.
 
 ## What to add when you change behaviour

@@ -58,6 +58,9 @@ app:
       redis:
         key-namespace: equalix:cms
         fallback-to-local: true
+      error-sampling:
+        enabled: false                 # load tests: publish equalix.cms.estimation.error*
+        interval-ms: 1000
 ```
 
 | Active keys | width | depth | Memory |
