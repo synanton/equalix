@@ -1,5 +1,7 @@
 package org.synanton.equalix.domain.port.out;
 
+import org.synanton.equalix.domain.model.CmsDriftReport;
+
 /** Outgoing port for scheduler metrics: task execution (also fed to the AdaptiveRpsController) and CMS accuracy. */
 public interface PerformanceMonitorPort {
 
@@ -18,4 +20,10 @@ public interface PerformanceMonitorPort {
      * @param error signed error; positive is an overestimate
      */
     void recordCmsEstimationError(long error);
+
+    /**
+     * Publishes the CMS drift measured by the watchdog, replacing the previously published values.
+     * Keys absent from {@link CmsDriftReport#topDrifting()} are treated as having no drift.
+     */
+    void publishCmsDrift(CmsDriftReport report);
 }

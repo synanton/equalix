@@ -1,5 +1,7 @@
 package org.synanton.equalix.domain.service;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -38,12 +40,25 @@ public class CmsErrorRecorder {
         fairnessKeys.addAll(clientCounts.findAllAsMap().keySet());
 
         CmsErrorStatistics statistics = new CmsErrorStatistics();
-        for (String fairnessKey : fairnessKeys) {
-            long error = cms.estimateCount(fairnessKey) - actual.getOrDefault(fairnessKey, 0);
+        measureDrift(actual, fairnessKeys).values().forEach(error -> {
             statistics.record(error);
             performanceMonitor.recordCmsEstimationError(error);
-        }
+        });
         log.debug("CMS estimation error sample: {}", statistics);
         return statistics;
+    }
+
+    /**
+     * Returns {@code F̂_k - F_k} for every tracked key against the current sketch.
+     *
+     * @param inFlight authoritative in-flight count per key; missing keys count as 0
+     * @param trackedKeys keys to compare, normally in-flight keys plus {@code client_counts} rows
+     */
+    public Map<String, Long> measureDrift(Map<String, Integer> inFlight, Collection<String> trackedKeys) {
+        Map<String, Long> drift = new HashMap<>();
+        for (String fairnessKey : trackedKeys) {
+            drift.put(fairnessKey, cms.estimateCount(fairnessKey) - inFlight.getOrDefault(fairnessKey, 0));
+        }
+        return drift;
     }
 }
