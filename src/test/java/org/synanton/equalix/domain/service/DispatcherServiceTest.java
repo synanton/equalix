@@ -9,13 +9,17 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.ToDoubleFunction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.synanton.equalix.config.properties.AdaptiveRpsProperties;
 import org.synanton.equalix.config.properties.QueueProperties;
+import org.synanton.equalix.domain.model.AgingPolicy;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
@@ -48,7 +52,8 @@ class DispatcherServiceTest {
     void shouldDispatchUpToFreeSlots() {
         QueueProperties props = queueProps(10, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(),
+            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(8L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
@@ -60,14 +65,16 @@ class DispatcherServiceTest {
         verify(remoteExecutor, times(2)).send(any(), any(), isNull());
         verify(cms, times(2)).add(eq("clientA"), eq(1L));
         verify(clientCounts, times(2)).incrementInFlight("clientA");
-        verify(virtualTimeService).recordDispatch(tasks);
+        verify(virtualTimeService).recordDispatch(eq(tasks), any());
+        verify(taskRepository, never()).findAndLockOldestDispatchable(anyInt(), any());
     }
 
     @Test
     void shouldDoNothingWhenNoFreeSlots() {
         QueueProperties props = queueProps(5, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(),
+            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(5L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
@@ -82,7 +89,8 @@ class DispatcherServiceTest {
     void shouldIncrementCmsAndCountsOnDispatch() {
         QueueProperties props = queueProps(10, 2);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(),
+            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(0L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
@@ -97,6 +105,51 @@ class DispatcherServiceTest {
         verify(cms).add("tenantX", 1L);
         verify(clientCounts).incrementInFlight("tenantX");
         verify(remoteExecutor).send(task.getId(), task.getPayload(), null);
+    }
+
+    @Test
+    void shouldDispatchBestAgedCandidatesFromBothOrderingsWhenAgingIsEnabled() {
+        QueueProperties props = queueProps(2, 0);
+        service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService,
+            AgingServiceTest.service(AgingPolicy.LINEAR, 100.0), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+
+        Task front = buildQueuedTask("clientA").setPriority(1_000L);                       // effective 1000
+        Task second = buildQueuedTask("clientA").setPriority(1_200L);                      // effective 1200
+        Task oldBack = buildQueuedTask("clientB").setPriority(9_000L)
+            .setCreatedAt(FIXED_NOW.minusSeconds(85));                                      // effective 500
+        when(clientCounts.totalInFlight()).thenReturn(0L);
+        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(front, second));
+        when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(oldBack, front));
+
+        service.dispatch();
+
+        InOrder sendOrder = inOrder(remoteExecutor);
+        sendOrder.verify(remoteExecutor).send(oldBack.getId(), oldBack.getPayload(), null);
+        sendOrder.verify(remoteExecutor).send(front.getId(), front.getPayload(), null);
+        verify(remoteExecutor, never()).send(eq(second.getId()), any(), any());
+        assertThat(second.getStatus()).isEqualTo(TaskStatus.QUEUED);
+    }
+
+    @Test
+    void shouldPassAgingCreditToVirtualTimeOnDispatch() {
+        QueueProperties props = queueProps(1, 0);
+        service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService,
+            AgingServiceTest.service(AgingPolicy.LINEAR, 100.0), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+
+        Task aged = buildQueuedTask("clientA").setPriority(9_000L).setCreatedAt(FIXED_NOW.minusSeconds(30));
+        when(clientCounts.totalInFlight()).thenReturn(0L);
+        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(aged));
+        when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(aged));
+
+        service.dispatch();
+
+        ArgumentCaptor<ToDoubleFunction<Task>> credit = ArgumentCaptor.captor();
+        verify(virtualTimeService).recordDispatch(eq(List.of(aged)), credit.capture());
+        assertThat(credit.getValue().applyAsDouble(aged)).isEqualTo(3_000.0);
     }
 
     private Task buildQueuedTask(String fairnessKey) {
@@ -119,6 +172,10 @@ class DispatcherServiceTest {
         props.setWorkerPollSize(50);
         props.setDispatcherInterval(50);
         return props;
+    }
+
+    private AgingService agingOff() {
+        return AgingServiceTest.service(AgingPolicy.NONE, 0.0);
     }
 
     private AdaptiveRpsProperties adaptiveRpsOff() {

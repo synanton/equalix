@@ -51,4 +51,9 @@ If `sequential=true` and `sequenceNumber` is set, Equalix runs **one task at a t
 
 ## Anti-starvation
 
-Queued non-sequential tasks older than `max-queued-time-ms` get `priority = 0` so they jump the queue.
+Two mechanisms:
+
+- **Aging** (`app.queue.aging.policy`, default `none`). The dispatcher ranks candidates by `priority − A(W)`, where W is the seconds a task has waited. `linear` = λ·W, `log` = λ·ln(1+W), `power` = λ·W^γ. Aging is evaluated at selection time because non-linear aging changes the order of tasks as time passes.
+- **Promotion.** Queued non-sequential tasks older than `max-queued-time-ms` get `priority = 0` so they jump the queue. This hard backstop applies with every aging policy.
+
+Under a steady backlog, aging does not change the long-term weighted shares. It only helps tasks stuck behind a structural backlog, such as a burst from a low-weight key (see [Mathematical invariants §10](mathematical-invariants3.md)).

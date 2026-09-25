@@ -306,6 +306,37 @@ Px(t)=Tk(t)+p(t)F^k(t)wk−λWx(t)Px(t)=Tk(t)+p(t)wkF^k(t)−λWx(t)
 
 As waiting time increases, the task becomes progressively more likely to be selected.
 
+### Implementation and simulation (EQX-4)
+
+`app.queue.aging.policy` selects A(W): `none` (default), `linear` λW, `log` λ·ln(1+W), or `power` λW^γ. W is in seconds and A is in priority units, where one weight-1 task costs `quantum` virtual-time units. Non-linear aging changes the relative order of queued tasks over time, so the dispatcher evaluates Px(t) = Pbase − A(Wx(t)) at selection time. It does this over a candidate pool: the best tasks by stored Pbase plus the oldest tasks. The `max-queued-time-ms` promotion remains a hard backstop.
+
+**Virtual time under aging.** A task promoted by aging is served ahead of its tag Fx. The key is still charged in full (Tk ← max(Tk, Fx)), but the system virtual time only advances to the aged position: V ← max(V, Fx − A(Wx)). Without this, one promoted task drags V forward, and every key's new work restarts from that inflated V. In the burst simulation below, advancing V to the full tag lowers the heavy tenant's minimum share over any 100 dispatches to 37% instead of 65% with `power`, and to 57% instead of 86% with `linear`.
+
+`AgingSimulationTest` runs the production VirtualTimeService and AgingService with tenants at weights 1 and 9 and a capacity of 10 tasks/s. Every policy is calibrated so that A(30 s) equals 10 weight-1 tasks:
+
+- linear: λ = 333
+- log: λ = 2912
+- power: λ = 11.1, γ = 2
+
+**Steady backlog.** Both tenants keep 50 tasks queued. The weight-1 share stays at 10% under every policy (sliding ϵmax(W=100) ≤ 0.01). With constant queue depth, each tenant's waiting time is constant, so aging adds only a constant offset per tenant, and virtual time keeps service rates proportional to weight. Aging cannot fracture long-term weighted shares.
+
+**Structural backlog.** The weight-9 tenant is backlogged, and the weight-1 tenant submits a burst of 300 tasks:
+
+| Policy | Burst wait p50 | Burst wait max | Weight-9 share while burst drains | Lowest weight-9 share over any 100 dispatches |
+|---|---|---|---|---|
+| none | 149 s | 299 s | 90% | 89% |
+| linear | 115 s | 230 s | 87% | 86% |
+| log | 137 s | 285 s | 89% | 83% |
+| power (γ=2) | 82 s | 131 s | 77% | 65% |
+
+Findings:
+
+- `power` promotes long waits most aggressively: the maximum wait drops by 56% at equal 30 s credit.
+- `log` gives a front-loaded boost that flattens, so it barely helps long waits.
+- Under every policy, the heavy tenant keeps the majority of capacity in every 100-dispatch window. Short-term weighted quotas are bent but not broken.
+
+The simulation asserts these properties.
+
 ------
 
 ## 11. Deriving a Starvation Bound
@@ -789,7 +820,7 @@ or:
 
 A(W)=λWγA(W)=λWγ
 
-**Current:** Linear aging is used; non-linear forms are under investigation to improve response to long waits.
+**Implemented (EQX-4):** `none`, `linear`, `log` and `power` are configurable; the default is `none`. The trade-offs measured by simulation are in §10. Use `power` with γ > 1 when long waits must be bounded, and `log` when disruption must stay minimal.
 
 ### 25.4 CMS semantics
 
@@ -872,5 +903,6 @@ This is the proposed mathematical foundation for Equalix v0.2.
 **Revision history:**
 
 - v0.1 – initial draft.
+- v0.4 – configurable aging A(W) (none/linear/log/power) evaluated at dispatch, aged system virtual time, simulation results (EQX-4).
 - v0.3 – persistent virtual time Tk implemented (EQX-3); weighted-fairness bound ϵmax(W) ≤ 2/|W| measured (EQX-1).
 - v0.2 – clarified notation (leaves LkLk), added infinite quota semantics, expanded CMS caveat with practical  mitigation, added stability as an open question, and aligned the model  with the intended persistent virtual time design.

@@ -53,7 +53,29 @@ app:
     max-payload-bytes: 1048576        # Ingest payload cap
     virtual-time:
       quantum: 1000                   # Virtual-time units charged per task at weight 1.0 (advance = quantum / weight)
+    aging:
+      policy: none                    # none | linear | log | power
+      lambda: 1000                    # Aging rate λ in priority units
+      gamma: 2.0                      # Exponent γ for power aging
+      candidate-pool-size: 200        # Rows locked per candidate ordering when aging is on
 ```
+
+`aging` applies an anti-starvation credit A(W) when the dispatcher selects tasks: effective priority is
+`priority − A(W)`, where W is the number of seconds since the task was created.
+
+| Policy | A(W) | Behaviour |
+|--------|------|-----------|
+| `none` | 0 | Default. Only the `max-queued-time-ms` promotion applies |
+| `linear` | λ·W | Constant pull per second of waiting |
+| `log` | λ·ln(1+W) | Early boost that flattens; bounded disruption, weak promotion of long waits |
+| `power` | λ·W^γ | With γ > 1, short waits barely matter and long waits are promoted aggressively |
+
+One weight-1 task is worth `virtual-time.quantum` priority units, so the policies are easiest to compare by
+calibrating λ to a credit at a target wait. For example, `A(30 s) = 10 × quantum` gives λ = 333 (linear),
+2912 (log), or 11.1 (power, γ = 2). With aging on, the dispatcher locks the best `candidate-pool-size` tasks
+by stored priority and the oldest `candidate-pool-size` tasks, then re-ranks them by aged priority.
+Increase the pool if heavy backlogs make the aged order approximate. `max-queued-time-ms` stays active as a
+hard backstop for every policy.
 
 `virtual-time.quantum` sets the scale of the persistent fairness term relative to the in-flight
 pressure term (`1000 / currentRps` per in-flight task). Larger values make historical weighted

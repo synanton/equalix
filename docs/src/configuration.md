@@ -39,6 +39,11 @@ app:
     max-payload-bytes: 1048576
     virtual-time:
       quantum: 1000                    # virtual-time units per task at weight 1.0
+    aging:
+      policy: none                     # none | linear | log | power
+      lambda: 1000                     # aging rate, priority units
+      gamma: 2.0                       # power exponent
+      candidate-pool-size: 200         # rows per candidate ordering when aging is on
 ```
 
 ## CMS

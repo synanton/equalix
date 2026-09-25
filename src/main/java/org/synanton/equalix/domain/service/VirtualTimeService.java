@@ -3,6 +3,7 @@ package org.synanton.equalix.domain.service;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.ToDoubleFunction;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.synanton.equalix.config.properties.QueueProperties;
@@ -51,11 +52,27 @@ public class VirtualTimeService {
      * Tasks without a finish tag (queued before virtual time was introduced) are ignored.
      */
     public void recordDispatch(Collection<Task> dispatchedTasks) {
+        recordDispatch(dispatchedTasks, task -> 0.0);
+    }
+
+    /**
+     * Advances T_k for each dispatched key to its highest tag, and V to the highest aged position
+     * {@code tag - agingCredit}.
+     *
+     * <p>A task promoted by aging is served ahead of its tag. The key is still charged the full tag, but V only
+     * moves to the position at which the task was actually served. Otherwise one promoted task would push V far
+     * ahead, and every key returning from idle would start behind the backlog.
+     *
+     * @param agingCredit aging credit A(W) of each task at dispatch time, in virtual-time units
+     */
+    public void recordDispatch(Collection<Task> dispatchedTasks, ToDoubleFunction<Task> agingCredit) {
         Map<String, Double> highestTagPerKey = new HashMap<>();
+        double highestServedPosition = Double.NEGATIVE_INFINITY;
         for (Task task : dispatchedTasks) {
             Double finishTag = task.getVirtualFinish();
             if (finishTag != null) {
                 highestTagPerKey.merge(task.getFairnessKey(), finishTag, Math::max);
+                highestServedPosition = Math.max(highestServedPosition, finishTag - agingCredit.applyAsDouble(task));
             }
         }
         if (highestTagPerKey.isEmpty()) {
@@ -63,10 +80,6 @@ public class VirtualTimeService {
         }
 
         highestTagPerKey.forEach(virtualTimeRepository::advanceClientVirtualTime);
-        double highestTag = highestTagPerKey.values().stream()
-            .mapToDouble(Double::doubleValue)
-            .max()
-            .orElseThrow();
-        virtualTimeRepository.advanceSystemVirtualTime(highestTag);
+        virtualTimeRepository.advanceSystemVirtualTime(highestServedPosition);
     }
 }

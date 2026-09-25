@@ -27,6 +27,12 @@ Package: `org.synanton.equalix.integration`.
 mvn test -Dtest=ProportionalFairnessIntegrationTest
 ```
 
+## Aging simulation (EQX-4)
+
+`AgingSimulationTest` is a domain-level simulation in simulated seconds, using the production `VirtualTimeService` and `AgingService`. For every aging policy, it compares long-wait promotion during a structural backlog with short-term weighted shares. `AgingIntegrationTest` checks the dispatcher's candidate pool against PostgreSQL.
+
+Integration tests get an `AdjustableClock` (from `BaseIntegrationTest`). It is frozen at context start and reset before each test. Call `clock.advance(...)` to make tasks age.
+
 ## What to add when you change behaviour
 
 | Change | Test |
