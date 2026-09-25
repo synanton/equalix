@@ -5,8 +5,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +12,7 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.test.web.servlet.MockMvc;
 import org.synanton.equalix.domain.port.in.TaskCompletionPort;
 import org.synanton.equalix.domain.port.in.TaskIngestionPort;
+import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.service.DispatcherService;
 import org.synanton.equalix.domain.service.PriorityCalculatorService;
 import org.synanton.equalix.domain.service.WatchdogService;
@@ -22,9 +21,8 @@ import org.synanton.equalix.domain.service.WatchdogService;
  * EQX-5: the watchdog publishes {@code equalix.cms.estimation.drift{fairnessKey}} before rebuilding the sketch,
  * and removes the series once the key stops drifting.
  *
- * <p>Keys ending in "Aa" and "BB" with the same prefix have equal {@code String.hashCode()} and share every
- * sketch cell (see invariants §20). That makes a real, reproducible drift without injecting faults, and shows
- * that a rebuild does not remove collision drift.
+ * <p>Drift is injected as a phantom +3 on an idle key, applied outside any transaction, as a crash between the
+ * database commit and the sketch update would leave it. The rebuild after the measurement clears it.
  */
 @AutoConfigureObservability
 class CmsDriftMetricIntegrationTest extends BaseIntegrationTest {
@@ -49,23 +47,26 @@ class CmsDriftMetricIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private WatchdogService watchdogService;
 
+    @Autowired
+    private CMSProviderPort cms;
+
     @Test
     void shouldPublishDriftPerKeyAndRemoveItWhenDriftClears() throws Exception {
         String prefix = "drift-" + UUID.randomUUID().toString().substring(0, 8) + "-";
-        String busyKey = prefix + "BB";
-        String idleKey = prefix + "Aa";
-        List<UUID> busyTasks = new ArrayList<>();
+        String busyKey = prefix + "busy";
+        String idleKey = prefix + "idle";
         for (int index = 0; index < 3; index++) {
-            busyTasks.add(taskIngestion.createTask(busyKey, BigDecimal.ONE, PAYLOAD, false, null, null, false).getId());
+            taskIngestion.createTask(busyKey, BigDecimal.ONE, PAYLOAD, false, null, null, false);
         }
         UUID idleTask = taskIngestion.createTask(idleKey, BigDecimal.ONE, PAYLOAD, false, null, null, false).getId();
         priorityCalculatorService.run();
         dispatcherService.dispatch();
         taskCompletion.completeTask(idleTask, true, null, null);
+        cms.add(idleKey, 3);
 
         watchdogService.reconcile();
 
-        // The idle key has 0 tasks in flight but shares all cells with the busy key's 3; the busy key is exact.
+        // The idle key has 0 tasks in flight but is estimated at 3; the busy key is exact.
         assertThat(scrape())
             .contains("equalix_cms_estimation_drift{fairnessKey=\"" + idleKey + "\"} 3.0")
             .doesNotContain("fairnessKey=\"" + busyKey + "\"")
@@ -75,9 +76,7 @@ class CmsDriftMetricIntegrationTest extends BaseIntegrationTest {
             .contains("equalix_cms_estimation_drift_keys_sampled 2.0")
             .contains("equalix_cms_estimation_drift_timestamp_seconds " + (double) clock.instant().getEpochSecond());
 
-        for (UUID taskId : busyTasks) {
-            taskCompletion.completeTask(taskId, true, null, null);
-        }
+        // The first run rebuilt the sketch from the task table, so the next measurement finds no drift.
         watchdogService.reconcile();
 
         assertThat(scrape())

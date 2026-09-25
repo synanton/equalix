@@ -34,6 +34,17 @@ public class WatchdogService {
     private final WatchdogProperties watchdogProperties;
     private final Clock clock;
 
+    /**
+     * Rebuilds the CMS from in-flight tasks without publishing drift; used at startup, when an empty sketch is
+     * expected and would otherwise read as an underestimate for every key.
+     */
+    @Transactional(readOnly = true)
+    public void warmUpCms() {
+        Map<String, Integer> actual = taskRepository.countInFlightByFairnessKey();
+        cms.rebuild(actual);
+        log.info("CMS warmed up from {} keys with in-flight tasks", actual.size());
+    }
+
     @Transactional
     public void reconcile() {
         log.info("Watchdog reconciliation started");

@@ -194,8 +194,14 @@ Two adapters implement `CMSProviderPort`:
   `app.queue.cms.mode=redis`. Recommended when running 3+ instances with strict cross-instance
   fairness requirements. See §7.7.
 
-On startup, the local adapter warms up from `client_counts`. The Redis adapter needs no warm-up
-because Redis retains state across restarts.
+Both adapters are wrapped in `TransactionAwareCmsProvider`. Inside a transaction, `add` only
+buffers the delta; the net deltas are applied after commit and discarded on rollback. A rolled-back
+dispatch or completion therefore leaves the sketch unchanged.
+
+Both adapters map a key to its cells with `CmsKeyHasher`: a 64-bit hash of the key's UTF-8 bytes,
+mixed per row. When the application is ready, `CmsWarmUpListener` rebuilds the sketch from
+in-flight tasks, so a restarted instance does not start empty. A shared Redis sketch is rebuilt the
+same way, as by a watchdog run.
 
 ### 5.5 Priority calculator
 
@@ -386,14 +392,16 @@ Practical sizing:
 
 ### 7.5 Operations
 
-- `add(key, delta)` - for each row `i`, compute `h_i(key)` and add `delta` to that cell.
+- `add(key, delta)` - for each row `i`, compute `h_i(key)` and add `delta` to that cell. `h_i`
+  mixes a 64-bit hash of the key's UTF-8 bytes with a per-row constant, so any `depth` is supported.
 - `estimateCount(key)` - return `max(0, min over the d cells for that key)`. The `max(0, …)`
   guard prevents negative values when decrement collisions occur.
 
 ### 7.6 Integration with `client_counts`
 
 - `client_counts` is the durable source of truth for hard quota enforcement and Watchdog repair.
-- CMS is updated in memory on every dispatch (+1) and completion (−1) - the fast path.
+- CMS is updated on every dispatch (+1) and completion (−1) - the fast path - once the
+  transaction that changed the task status has committed.
 - `client_counts` is updated in the same transaction as the status change.
 - If the two diverge (crash, missed event), the Watchdog reconciles both.
 
@@ -404,7 +412,10 @@ completions. Two instances can each dispatch believing the fairness key is light
 resulting in temporary over-dispatch until the next Watchdog cycle. The Redis adapter replaces
 the per-instance sketch with a single shared matrix.
 
-**Layout** - one Redis hash `{namespace}:cms` with fields `r{row}:c{col}`. `add` uses a Lua
+**Layout** - one Redis hash `{key-namespace}:v{layout}` (default `equalix:cms:v2`) with fields
+`r{row}:c{col}`, plus a `{key-namespace}:v{layout}:total` counter. The layout version is part of the
+key, so instances that hash keys differently never write into the same hash during a rolling
+deploy. `add` uses a Lua
 script for atomic multi-cell increment; `estimateCount` uses `HMGET` for all `d` cells.
 Batch reads in the priority calculator are pipelined into a single round-trip.
 

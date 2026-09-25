@@ -96,11 +96,9 @@ class CmsSignedUpdateErrorExperimentTest {
     }
 
     @Test
-    void shouldCollideInEveryRowForKeysWithEqualStringHashCode() {
-        // Known limitation, measured here and fixed separately: every row is derived from the 32-bit
-        // String.hashCode(), so keys with equal hash codes share all d cells and even the production-size sketch
-        // cannot separate them. Random keys collide with probability about K^2 / 2^33, but structured ids such as
-        // "...Aa" and "...BB" collide deterministically.
+    void shouldSeparateKeysWithEqualStringHashCode() {
+        // Regression for the 32-bit hashing found in EQX-2: rows used to be derived from String.hashCode(), so keys
+        // such as "...Aa" and "...BB" shared all d cells and the idle key read the busy key's full count.
         QueueProperties props = new QueueProperties();
         props.getCms().setWidth(SketchSize.PRODUCTION.width());
         props.getCms().setDepth(SketchSize.PRODUCTION.depth());
@@ -109,7 +107,7 @@ class CmsSignedUpdateErrorExperimentTest {
 
         sketch.add("tenant-BB", 40);
 
-        assertThat(sketch.estimateCount("tenant-Aa")).isEqualTo(40);
+        assertThat(sketch.estimateCount("tenant-Aa")).isZero();
     }
 
     @Test

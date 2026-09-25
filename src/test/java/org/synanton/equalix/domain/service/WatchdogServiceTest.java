@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -103,5 +104,15 @@ class WatchdogServiceTest {
         order.verify(performanceMonitor).publishCmsDrift(new CmsDriftReport(NOW, 3, 2, 2, -1, 3,
             Map.of("phantom", 2L, "under", -1L)));
         order.verify(cms).rebuild(inFlight);
+    }
+
+    @Test
+    void shouldWarmUpSketchFromInFlightTasksWithoutPublishingDrift() {
+        when(taskRepository.countInFlightByFairnessKey()).thenReturn(Map.of("clientA", 2));
+
+        watchdogService.warmUpCms();
+
+        verify(cms).rebuild(Map.of("clientA", 2));
+        verifyNoInteractions(performanceMonitor, cmsErrorRecorder, clientCounts);
     }
 }
