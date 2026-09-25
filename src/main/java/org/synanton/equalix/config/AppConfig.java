@@ -14,7 +14,8 @@ import org.synanton.equalix.config.properties.*;
         SequentialProperties.class,
         CmsProperties.class,
         ExecutorProperties.class,
-        SecurityProperties.class
+        SecurityProperties.class,
+        HierarchicalProperties.class
 })
 public class AppConfig {
 

@@ -35,6 +35,8 @@ public class DispatcherService {
     private final AdaptiveRpsProperties adaptiveRpsProperties;
     private final VirtualTimeService virtualTimeService;
     private final AgingService agingService;
+    private final FairnessHierarchy fairnessHierarchy;
+    private final HierarchicalDispatchPlanner hierarchicalDispatchPlanner;
     private final Clock clock;
 
     @Transactional
@@ -58,9 +60,16 @@ public class DispatcherService {
             : null;
 
         Instant now = Instant.now(clock);
-        List<Task> tasks = agingService.isEnabled()
-            ? selectWithAging(freeSlots, maxPerClient, now)
-            : taskRepository.findAndLockDispatchable(freeSlots, maxPerClient);
+        HierarchicalDispatchPlanner.Selection hierarchicalSelection = null;
+        List<Task> tasks;
+        if (fairnessHierarchy.isEnabled()) {
+            hierarchicalSelection = hierarchicalDispatchPlanner.select(freeSlots, maxPerClient);
+            tasks = hierarchicalSelection.tasks();
+        } else if (agingService.isEnabled()) {
+            tasks = selectWithAging(freeSlots, maxPerClient, now);
+        } else {
+            tasks = taskRepository.findAndLockDispatchable(freeSlots, maxPerClient);
+        }
 
         if (tasks.isEmpty()) {
             return;
@@ -73,7 +82,11 @@ public class DispatcherService {
             clientCounts.incrementInFlight(task.getFairnessKey());
             remoteExecutor.send(task.getId(), task.getPayload(), null);
         }
-        virtualTimeService.recordDispatch(tasks, task -> agingService.credit(task, now));
+        boolean aged = hierarchicalSelection == null && agingService.isEnabled();
+        virtualTimeService.recordDispatch(tasks, task -> aged ? agingService.credit(task, now) : 0.0);
+        if (hierarchicalSelection != null) {
+            hierarchicalDispatchPlanner.recordDispatch(hierarchicalSelection);
+        }
 
         log.debug("Dispatched {} tasks; global in-flight was {}", tasks.size(), globalInFlight);
     }

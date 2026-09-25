@@ -37,6 +37,7 @@ app:
     max-queued-time-ms: 60000
     task-timeout-ms: 300000            # 0 disables TIMEOUT
     max-payload-bytes: 1048576
+    fairness-mode: flat                # flat | hierarchical, see app.hierarchical
     virtual-time:
       quantum: 1000                    # virtual-time units per task at weight 1.0
     aging:
@@ -45,6 +46,23 @@ app:
       gamma: 2.0                       # power exponent
       candidate-pool-size: 200         # rows per candidate ordering when aging is on
 ```
+
+## Hierarchical fairness
+
+```yaml
+app:
+  hierarchical:
+    separator: /
+    layers:
+      - name: organization
+        default-weight: 1.0
+      - name: department
+        default-weight: 1.0
+    weights: {}                        # e.g. "[acme]": 2.0
+    metrics-depth: 1
+```
+
+Used when `app.queue.fairness-mode` is `hierarchical`. See [Concepts](concepts.md#hierarchical-fairness).
 
 ## CMS
 

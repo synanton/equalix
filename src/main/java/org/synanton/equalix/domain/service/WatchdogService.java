@@ -32,6 +32,7 @@ public class WatchdogService {
     private final CmsErrorRecorder cmsErrorRecorder;
     private final PerformanceMonitorPort performanceMonitor;
     private final WatchdogProperties watchdogProperties;
+    private final FairnessHierarchy hierarchy;
     private final Clock clock;
 
     /**
@@ -67,10 +68,17 @@ public class WatchdogService {
         }
 
         // Drift must be measured against the sketch as the scheduler has been using it, i.e. before the rebuild.
+        // In hierarchical mode internal nodes and the root are measured too; their true count is their leaves' sum.
+        Set<String> driftKeys = new HashSet<>(keys);
+        if (hierarchy.isEnabled()) {
+            keys.forEach(fairnessKey -> driftKeys.addAll(hierarchy.internalNodeKeys(fairnessKey)));
+            driftKeys.add(FairnessHierarchy.ROOT);
+        }
         CmsDriftReport drift = CmsDriftReport.of(
-            cmsErrorRecorder.measureDrift(actual, keys),
+            cmsErrorRecorder.measureDrift(hierarchy.withAncestors(actual), driftKeys),
             watchdogProperties.getDriftMetricMaxKeys(),
-            Instant.now(clock));
+            Instant.now(clock),
+            hierarchy::layerOf);
         performanceMonitor.publishCmsDrift(drift);
 
         cms.rebuild(actual);

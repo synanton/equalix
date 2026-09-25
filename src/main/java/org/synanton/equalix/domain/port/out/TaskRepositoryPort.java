@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.synanton.equalix.domain.model.QueuedLeaf;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
 
@@ -31,6 +32,17 @@ public interface TaskRepositoryPort {
      * Used to build the aging candidate pool.
      */
     List<Task> findAndLockOldestDispatchable(int limit, @Nullable Integer maxPerClient);
+
+    /** Dispatchable backlog (QUEUED, non-sequential) per fairness key, for hierarchical selection. */
+    List<QueuedLeaf> findQueuedLeaves();
+
+    /**
+     * Locks up to the given number of QUEUED non-sequential tasks per fairness key, best
+     * {@code (priority, created_at, id)} first, skipping rows locked by others.
+     *
+     * @return tasks grouped by key in the order of {@code limitsByKey}, each group best first
+     */
+    List<Task> findAndLockQueuedHeads(Map<String, Integer> limitsByKey);
 
     /** Finds tasks that have been in QUEUED status longer than the given threshold. */
     List<Task> findStarvedTasks(long olderThanMs, int limit);

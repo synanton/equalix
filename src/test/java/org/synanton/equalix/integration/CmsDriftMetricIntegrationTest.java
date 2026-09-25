@@ -68,12 +68,13 @@ class CmsDriftMetricIntegrationTest extends BaseIntegrationTest {
 
         // The idle key has 0 tasks in flight but is estimated at 3; the busy key is exact.
         assertThat(scrape())
-            .contains("equalix_cms_estimation_drift{fairnessKey=\"" + idleKey + "\"} 3.0")
+            .contains("equalix_cms_estimation_drift{fairnessKey=\"" + idleKey + "\",layer=\"key\"} 3.0")
             .doesNotContain("fairnessKey=\"" + busyKey + "\"")
             .contains("equalix_cms_estimation_drift_max 3.0")
             .contains("equalix_cms_estimation_drift_min 0.0")
             .contains("equalix_cms_estimation_drift_keys 1.0")
             .contains("equalix_cms_estimation_drift_keys_sampled 2.0")
+            .contains("equalix_cms_estimation_drift_absolute 3.0")
             .contains("equalix_cms_estimation_drift_timestamp_seconds " + (double) clock.instant().getEpochSecond());
 
         // The first run rebuilt the sketch from the task table, so the next measurement finds no drift.

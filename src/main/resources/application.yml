@@ -46,6 +46,9 @@ app:
     max-queued-time-ms: 60000
     task-timeout-ms: 300000
     max-payload-bytes: 1048576
+    # flat: every fairness key is an independent tenant. hierarchical: keys are paths (org/department/...)
+    # and every layer is scheduled fairly among its siblings, see app.hierarchical (EQX-7).
+    fairness-mode: flat
     virtual-time:
       # Virtual-time units charged per task at weight 1.0 (a task advances its key by quantum / weight).
       # Comparable to the in-flight pressure term, which adds 1000 / currentRps per in-flight task.
@@ -135,6 +138,20 @@ app:
     # Consecutive agreeing evaluations required to reverse direction (increase after decrease or the
     # opposite); 1 reverses immediately. The emergency brake is never dampened.
     direction-change-confirmations: 3
+  hierarchical:
+    # Used when app.queue.fairness-mode is hierarchical.
+    separator: /
+    # Layers from the root down. Segments beyond the last layer fold into it; shorter keys are leaves higher up.
+    layers:
+      - name: organization
+        default-weight: 1.0
+      - name: department
+        default-weight: 1.0
+    # Per-node weight overrides by path, e.g. "[acme]": 2.0 or "[acme/sales]": 3.0. Leaves otherwise use the
+    # task weight; other nodes use their layer's default-weight.
+    weights: {}
+    # Layers (from the root) whose nodes get an equalix.hierarchy.dispatches{layer,node} counter.
+    metrics-depth: 1
   watchdog:
     interval-minutes: 5
     # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).

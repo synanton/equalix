@@ -13,6 +13,10 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import java.util.Map;
+import org.synanton.equalix.domain.model.FairnessMode;
+import org.synanton.equalix.domain.service.FairnessHierarchyTest;
+
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -45,7 +49,7 @@ class CreateTaskUseCaseTest {
         queueProperties.setMaxPayloadBytes(1024);
         useCase = new CreateTaskUseCase(
             taskRepository, sequenceStateRepository, queueProperties,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            FairnessHierarchyTest.hierarchy(FairnessMode.FLAT, Map.of()), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(sequenceStateRepository.findOrCreate(any()))
             .thenAnswer(inv -> new ClientSequenceState().setFairnessKey(inv.getArgument(0)));
@@ -97,6 +101,22 @@ class CreateTaskUseCaseTest {
         assertThatThrownBy(() -> useCase.createTask("  ", new BigDecimal("1.0"), new byte[]{1},
                 false, null, null, false))
             .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void shouldRejectKeysWithEmptySegmentsInHierarchicalMode() {
+        QueueProperties queueProperties = new QueueProperties();
+        queueProperties.setMaxPayloadBytes(1024);
+        CreateTaskUseCase hierarchical = new CreateTaskUseCase(taskRepository, sequenceStateRepository,
+            queueProperties, FairnessHierarchyTest.hierarchy(FairnessMode.HIERARCHICAL, Map.of()),
+            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> hierarchical.createTask("acme//sales", BigDecimal.ONE, new byte[]{1}, false, null,
+            null, false))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("empty segments");
+        assertThat(hierarchical.createTask("acme/sales", BigDecimal.ONE, new byte[]{1}, false, null, null, false)
+            .getFairnessKey()).isEqualTo("acme/sales");
     }
 
     @Test

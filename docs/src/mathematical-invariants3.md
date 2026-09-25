@@ -979,6 +979,49 @@ A third experiment should evaluate the stability of the adaptive RPS controller 
 
 ------
 
+## 27. Hierarchical Virtual Time (EQX-7)
+
+With `app.queue.fairness-mode: hierarchical`, a fairness key is a path through a tenant tree, and every layer is scheduled fairly among its siblings. With layers organization → department:
+
+- `acme/sales` is organization `acme/` → department `acme/sales`;
+- extra segments fold into the last layer;
+- a one-segment key such as `smallclub` is a leaf directly under the root, competing with `acme/`.
+
+This solves the two flat-mode failures:
+
+- With one key per organization, a hot department takes the organization's whole share: it is FIFO inside the key.
+- With one key per department, an organization with n departments claims n times the share of a single-key tenant.
+
+### Model
+
+Every node v has a weight wv and a virtual runtime τv, measured in its parent's virtual time; this is CFS group scheduling. For each dispatch slot, selection descends from the root. At each node it picks the backlogged child c minimising
+
+τc + q/wc + p(t)·F̂c/wc
+
+(finish time after one more task, plus that node's in-flight pressure), with ties broken by key. Every node on the chosen leaf's path is then charged τv ← τv + q/wv.
+
+**Share.** Among the backlogged children of a parent P, child c receives the fraction wc / Σ wj of P's service. A leaf's share of the whole system is the product of these fractions along its path.
+
+**Idle children.** Each parent keeps a floor mP = max(mP, min over its backlogged children of τc), taken after each tick's charges. A child that returns from idle starts at max(τc, mP), so idleness does not bank credit. This is the hierarchical counterpart of the system virtual time V in §7. Children that stay backlogged are never below mP, so the floor never takes anything from them.
+
+**Pressure per layer.** The sketch also counts every internal node and the root. The pressure term therefore cascades: a department that holds in-flight tasks is pushed back among its siblings, and its organization among the other organizations. The number of sketch entries grows by at most a factor of the number of layers plus one, and the §20 bound 2N/w grows by the same factor.
+
+Selection runs at dispatch time, not queue time. A node's share depends on which siblings are backlogged at that moment, and a priority computed at queue time cannot know that. Within a leaf, tasks keep the order of their stored priority (the §7 tag plus pressure). Tasks promoted by `max-queued-time-ms` are served first and charged normally. In hierarchical mode, aging (§10) is ignored.
+
+### Validation
+
+- **`HierarchicalSelectorTest`** (10,000 dispatches, exact to within 0.1%):
+  - a 10-department organization against a single-leaf tenant gets 50% / 50%, with each department at 5%;
+  - weights organization 3 : tenant 1 and, inside it, department 3 : 1 give 56.25% / 18.75% / 25%;
+  - a department returning after 1,000 dispatches of idleness gets 49–51 of the next 100, with no burst;
+  - flat mode reproduces the 10/11 problem.
+- **`HierarchicalFairnessIntegrationTest`** (PostgreSQL, real priority calculator and dispatcher, 2,000 dispatches each):
+  - a hot department with 10× the backlog and its sibling each get exactly 50%, with sliding ϵmax(W=100) = 0;
+  - the 10-department organization against the single-leaf tenant gets 50% / 50%, with ϵmax = 0;
+  - a sibling's first task, arriving behind 500 queued tasks of the hot department, is dispatched in the next tick.
+
+------
+
 ## Final Mathematical Model
 
 The current proposed Equalix model is:
@@ -1000,6 +1043,7 @@ This is the proposed mathematical foundation for Equalix v0.2.
 **Revision history:**
 
 - v0.1 – initial draft.
+- v0.9 – hierarchical virtual time (CFS-style per-layer vruntime with idle floors, per-layer pressure, multi-layer CMS accounting) (EQX-7).
 - v0.8 – adaptive RPS stability controls (adjustment interval, latency EMA, direction dampener) evaluated by closed-loop simulation (EQX-6).
 - v0.7 – CMS updates applied after commit, 64-bit key hashing (Redis layout v2), startup warm-up; EQX-2 figures refreshed.
 - v0.6 – watchdog publishes CMS drift ek per key and in aggregate before each rebuild (EQX-5).

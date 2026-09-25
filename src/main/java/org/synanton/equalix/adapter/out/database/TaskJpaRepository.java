@@ -61,6 +61,39 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
     );
 
     @Query(value = """
+        SELECT t.fairness_key,
+               COUNT(*),
+               SUM(CASE WHEN t.priority <= 0 THEN 1 ELSE 0 END),
+               MAX(t.weight),
+               COALESCE(MAX(cc.in_flight_count), 0)
+        FROM tasks t
+        LEFT JOIN client_counts cc ON cc.fairness_key = t.fairness_key
+        WHERE t.status = 'QUEUED'
+          AND t.is_sequential = false
+        GROUP BY t.fairness_key
+        """, nativeQuery = true)
+    List<Object[]> findQueuedLeaves();
+
+    /** {@code limits} is a JSON array of {"key": ..., "limit": ...}; JSON avoids driver-specific array binding. */
+    @Query(value = """
+        SELECT q.*
+        FROM ROWS FROM (jsonb_to_recordset(CAST(:limits AS jsonb)) AS (key text, "limit" int))
+             WITH ORDINALITY AS wanted(key, "limit", position)
+        CROSS JOIN LATERAL (
+            SELECT t.*
+            FROM tasks t
+            WHERE t.fairness_key = wanted.key
+              AND t.status = 'QUEUED'
+              AND t.is_sequential = false
+            ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
+            LIMIT wanted."limit"
+            FOR UPDATE OF t SKIP LOCKED
+        ) q
+        ORDER BY wanted.position, q.priority ASC NULLS LAST, q.created_at ASC, q.id ASC
+        """, nativeQuery = true)
+    List<TaskEntity> findAndLockQueuedHeads(@Param("limits") String limitsJson);
+
+    @Query(value = """
         SELECT * FROM tasks
         WHERE status = 'QUEUED'
           AND is_sequential = false

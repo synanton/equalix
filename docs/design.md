@@ -497,6 +497,26 @@ schedules on virtual time, delivering the same long-term proportional outcome wi
 synchronization cost. Over a short sliding window every fairness key receives its weighted share
 of dispatch slots.
 
+### 9.5 Hierarchical scheduling (EQX-7)
+
+With `app.queue.fairness-mode: hierarchical`, `DispatcherService` delegates selection to
+`HierarchicalDispatchPlanner`:
+
+1. `findQueuedLeaves()` groups QUEUED non-sequential tasks by fairness key: count, promoted count, max
+   weight and in-flight count. It uses the partial index `idx_tasks_queued_by_key` from `V5`.
+2. It loads `hierarchy_node` rows (virtual runtime and children floor) for every node on those paths.
+3. `HierarchicalSelector` (pure) plans `freeSlots` picks. It descends from the root, at each node taking
+   the backlogged child with the least `τ + q/w + p·F̂/w`, then charges `q/w` along the path.
+4. `findAndLockQueuedHeads()` locks the planned number of tasks per key, best priority first, `FOR UPDATE
+   SKIP LOCKED`, in a single `LATERAL` query.
+5. After dispatch, each node is charged `τ = max(τ, floor) + Σ q/w`, and each parent's children floor is
+   raised. Both are monotonic upserts in the same transaction.
+
+The sequential dispatcher charges its tasks through the same path. In hierarchical mode, the CMS is wrapped in
+`HierarchicalCmsProvider`, which also counts every internal node (`acme/`) and the root (`""`). That provides
+the per-layer pressure, and the total in flight comes from the root. See invariants §27 for the model and
+measurements.
+
 ---
 
 ## 10. Concurrency and consistency
@@ -572,11 +592,16 @@ Metrics exposed at `/actuator/prometheus` via Micrometer:
 | `equalix.task.duration`        | Timer   | `success`                           | `MicrometerPerformanceMonitorAdapter`   |
 | `equalix.task.errors`          | Counter |                                     | `MicrometerPerformanceMonitorAdapter`   |
 | `equalix.adaptive.rps`         | Gauge   |                                     | `MicrometerPerformanceMonitorAdapter`   |
+| `equalix.cms.estimation.error`, `…error.magnitude` | Summary | `direction` | CMS error sampling (EQX-2, opt-in) |
+| `equalix.cms.estimation.drift` | Gauge   | `fairnessKey`, `layer`              | Watchdog, before each rebuild (EQX-5)   |
+| `equalix.cms.estimation.drift.{max,min,absolute,keys,keys.sampled,timestamp}` | Gauge | | Watchdog (EQX-5) |
+| `equalix.cms.estimation.drift.layer.absolute` | Gauge | `layer`                 | Watchdog (EQX-7)                        |
+| `equalix.hierarchy.dispatches` | Counter | `layer`, `node`                     | Hierarchical dispatcher (EQX-7)         |
 | `jvm.*`, `process.*`, `system.*`    | various | Micrometer defaults                 | Spring Boot Actuator                    |
 | `http.server.requests`              | Timer   | `uri`, `method`, `status`           | Spring Boot Actuator                    |
 
-Additional metrics (dispatcher throughput, CMS estimates per key, Watchdog drift count,
-sequential blocked count) are candidates for follow-up work.
+Additional metrics (dispatcher throughput, sequential blocked count) are candidates for follow-up
+work.
 
 REST APIs require `X-API-Key`. `/actuator/health` and `/actuator/info` are public;
 `/actuator/prometheus` requires the API key.
@@ -744,7 +769,8 @@ against a rate-limited downstream executor is the primary problem.
 
 ## 19. Future enhancements
 
-- Per-key CMS estimate gauges and Watchdog drift counters.
+- Per-tenant latency attribution for adaptive RPS. Today one global controller sets capacity, and
+  per-layer in-flight pressure pushes back the tenants that hold it (§9.5).
 - gRPC ingestion adapter alongside REST and Kafka.
 - Dead-letter management UI for inspecting and replaying `FAILED` tasks.
 - Distributed CMS is designed (§7.7) but its production hardening (health probes, connection

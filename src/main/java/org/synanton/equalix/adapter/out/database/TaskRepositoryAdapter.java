@@ -1,5 +1,8 @@
 package org.synanton.equalix.adapter.out.database;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,6 +13,7 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.synanton.equalix.adapter.out.database.entity.TaskEntity;
+import org.synanton.equalix.domain.model.QueuedLeaf;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
 import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
@@ -19,6 +23,7 @@ import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 public class TaskRepositoryAdapter implements TaskRepositoryPort {
 
     private final TaskJpaRepository jpaRepository;
+    private final ObjectMapper objectMapper;
 
     @Override
     public Task save(Task task) {
@@ -46,6 +51,33 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
     public List<Task> findAndLockOldestDispatchable(int limit, @Nullable Integer maxPerClient) {
         return jpaRepository.findAndLockOldestDispatchable(limit, maxPerClient)
             .stream().map(this::toDomain).toList();
+    }
+
+    @Override
+    public List<QueuedLeaf> findQueuedLeaves() {
+        return jpaRepository.findQueuedLeaves().stream()
+            .map(row -> new QueuedLeaf(
+                (String) row[0],
+                ((Number) row[1]).intValue(),
+                ((Number) row[2]).intValue(),
+                ((Number) row[3]).doubleValue(),
+                ((Number) row[4]).intValue()))
+            .toList();
+    }
+
+    @Override
+    public List<Task> findAndLockQueuedHeads(Map<String, Integer> limitsByKey) {
+        if (limitsByKey.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> limits = new ArrayList<>();
+        limitsByKey.forEach((fairnessKey, limit) -> limits.add(Map.of("key", fairnessKey, "limit", limit)));
+        try {
+            return jpaRepository.findAndLockQueuedHeads(objectMapper.writeValueAsString(limits))
+                .stream().map(this::toDomain).toList();
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Cannot serialise dispatch limits", exception);
+        }
     }
 
     @Override

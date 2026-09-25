@@ -14,6 +14,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.synanton.equalix.adapter.out.database.ClientCountsJpaRepository;
 import org.synanton.equalix.adapter.out.database.ClientSequenceStateJpaRepository;
 import org.synanton.equalix.adapter.out.database.ClientVirtualTimeJpaRepository;
+import org.synanton.equalix.adapter.out.database.HierarchyNodeJpaRepository;
 import org.synanton.equalix.adapter.out.database.SchedulerVirtualClockJpaRepository;
 import org.synanton.equalix.adapter.out.database.TaskJpaRepository;
 import org.synanton.equalix.domain.port.out.RemoteExecutorPort;
@@ -41,6 +42,9 @@ public abstract class BaseIntegrationTest {
     @Autowired
     protected SchedulerVirtualClockJpaRepository schedulerVirtualClockJpaRepository;
 
+    @Autowired
+    protected HierarchyNodeJpaRepository hierarchyNodeJpaRepository;
+
     /** Application clock; frozen at context start and reset before each test unless a test advances it. */
     @Autowired
     protected AdjustableClock clock;
@@ -52,6 +56,7 @@ public abstract class BaseIntegrationTest {
         sequenceStateJpaRepository.deleteAllInBatch();
         clientVirtualTimeJpaRepository.deleteAllInBatch();
         schedulerVirtualClockJpaRepository.deleteAllInBatch();
+        hierarchyNodeJpaRepository.deleteAllInBatch();
         taskJpaRepository.deleteAllInBatch();
     }
 
