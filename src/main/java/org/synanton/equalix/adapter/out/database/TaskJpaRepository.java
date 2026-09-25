@@ -30,7 +30,7 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
          OR cc.in_flight_count < :maxPerClient
          OR cc.in_flight_count IS NULL
       )
-    ORDER BY t.priority ASC NULLS LAST
+    ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
     LIMIT :limit
     FOR UPDATE OF t SKIP LOCKED
     """, nativeQuery = true)

@@ -50,6 +50,7 @@ Flyway under `src/main/resources/db/migration/`:
 - `V1` tasks + `client_counts`
 - `V2` shedlock
 - `V3` sequential columns + `client_sequence_state`
+- `V4` persistent virtual time: `client_virtual_time`, `scheduler_virtual_clock`, `tasks.virtual_finish`
 
 ## Config beans
 

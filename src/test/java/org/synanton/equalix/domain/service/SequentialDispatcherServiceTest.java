@@ -38,13 +38,15 @@ class SequentialDispatcherServiceTest {
     private ClientCountsRepositoryPort clientCounts;
     @Mock
     private RemoteExecutorPort remoteExecutor;
+    @Mock
+    private VirtualTimeService virtualTimeService;
 
     private SequentialDispatcherService service;
 
     @BeforeEach
     void setUp() {
         service = new SequentialDispatcherService(
-            taskRepository, sequenceStateRepository, cms, clientCounts, remoteExecutor,
+            taskRepository, sequenceStateRepository, cms, clientCounts, remoteExecutor, virtualTimeService,
             Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
     }
 
@@ -62,6 +64,7 @@ class SequentialDispatcherServiceTest {
         verify(remoteExecutor).send(nextTask.getId(), nextTask.getPayload(), null);
         verify(cms).add("clientA", 1L);
         verify(clientCounts).incrementInFlight("clientA");
+        verify(virtualTimeService).recordDispatch(List.of(nextTask));
     }
 
     @Test

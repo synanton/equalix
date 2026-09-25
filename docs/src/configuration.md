@@ -29,6 +29,8 @@ app:
     max-queued-time-ms: 60000
     task-timeout-ms: 300000            # 0 disables TIMEOUT
     max-payload-bytes: 1048576
+    virtual-time:
+      quantum: 1000                    # virtual-time units per task at weight 1.0
 ```
 
 ## CMS

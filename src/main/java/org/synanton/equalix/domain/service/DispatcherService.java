@@ -29,6 +29,7 @@ public class DispatcherService {
     private final QueueProperties queueProperties;
     private final AdaptiveRpsController adaptiveRpsController;
     private final AdaptiveRpsProperties adaptiveRpsProperties;
+    private final VirtualTimeService virtualTimeService;
     private final Clock clock;
 
     @Transactional
@@ -65,6 +66,7 @@ public class DispatcherService {
             clientCounts.incrementInFlight(task.getFairnessKey());
             remoteExecutor.send(task.getId(), task.getPayload(), null);
         }
+        virtualTimeService.recordDispatch(tasks);
 
         log.debug("Dispatched {} tasks; global in-flight was {}", tasks.size(), globalInFlight);
     }

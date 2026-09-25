@@ -193,7 +193,7 @@ Virtual time represents:
 
 This gives weighted fairness a persistent state rather than deriving fairness only from instantaneous load.
 
-> **Note on implementation:** The current Equalix implementation uses a simpler “current time”  approach, but the intended long‑term model is based on persistent TkTk. Future versions may migrate to this model to improve fairness guarantees.
+> **Note on implementation (EQX-3):** Equalix persists Tk in `client_virtual_time` and uses self-clocked fair queueing. When task x of key k is queued it receives a finish tag Fx = max(Fk_last, V) + sx/wk, where Fk_last is the key's previous tag and V is the system virtual time (the highest dispatched tag, stored in `scheduler_virtual_clock`). On dispatch, Tk ← max(Tk, Fx) and V ← max(V, Fx). For a continuously backlogged key this is exactly Tk ← Tk + sx/wk. The V floor stops an idle key from accumulating credit it could spend in a burst. Tags are scaled by `app.queue.virtual-time.quantum`. All tasks currently have sx = 1.
 
 ------
 
@@ -732,7 +732,7 @@ TkTk
 
 as persistent accumulated virtual time, or adopt the simpler current-time formulation?
 
-**Current stance:** The mathematical model uses persistent TkTk; the implementation may use a simplification. Future work will evaluate the benefits of full persistence.
+**Resolved (EQX-3):** Equalix uses persistent accumulated virtual time Tk with a system virtual-time floor V (see §7). Long-term convergence to the weighted shares is validated in EQX-1.
 
 ### 25.2 Pressure coefficient
 

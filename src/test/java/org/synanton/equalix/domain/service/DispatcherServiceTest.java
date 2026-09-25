@@ -38,6 +38,8 @@ class DispatcherServiceTest {
     private RemoteExecutorPort remoteExecutor;
     @Mock
     private AdaptiveRpsController adaptiveRpsController;
+    @Mock
+    private VirtualTimeService virtualTimeService;
 
     @InjectMocks
     private DispatcherService service;
@@ -46,7 +48,7 @@ class DispatcherServiceTest {
     void shouldDispatchUpToFreeSlots() {
         QueueProperties props = queueProps(10, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(8L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
@@ -58,20 +60,21 @@ class DispatcherServiceTest {
         verify(remoteExecutor, times(2)).send(any(), any(), isNull());
         verify(cms, times(2)).add(eq("clientA"), eq(1L));
         verify(clientCounts, times(2)).incrementInFlight("clientA");
+        verify(virtualTimeService).recordDispatch(tasks);
     }
 
     @Test
     void shouldDoNothingWhenNoFreeSlots() {
         QueueProperties props = queueProps(5, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(5L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
 
         service.dispatch();
 
-        verifyNoInteractions(remoteExecutor);
+        verifyNoInteractions(remoteExecutor, virtualTimeService);
         verify(taskRepository, never()).findAndLockDispatchable(anyInt(), any());
     }
 
@@ -79,7 +82,7 @@ class DispatcherServiceTest {
     void shouldIncrementCmsAndCountsOnDispatch() {
         QueueProperties props = queueProps(10, 2);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
-            adaptiveRpsController, adaptiveRpsOff(), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(0L);
         when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());

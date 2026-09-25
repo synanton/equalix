@@ -15,10 +15,11 @@ Producers ──REST / Kafka──► Equalix ──HTTP execute──► Your w
 Scheduling uses **virtual time**:
 
 ```text
-priority = now_ms + (in_flight_estimate × penalty_factor / weight)
+priority = finish_tag + (in_flight_estimate × penalty_factor / weight)
+finish_tag = max(key_virtual_finish, system_virtual_time) + quantum / weight
 ```
 
-Lower priority runs first. Keys with many in-flight tasks are pushed back. Higher `weight` gets a larger share.
+Lower priority runs first. Each key's virtual time is persisted, so fairness holds across bursts and restarts. Keys with many in-flight tasks are pushed back. Higher `weight` gets a larger share.
 
 In-flight estimates come from a **Count-Min Sketch** (fast path) with a durable `client_counts` table for hard quotas. A **Watchdog** rebuilds both from `DISPATCHED`/`COMMITTED` rows.
 

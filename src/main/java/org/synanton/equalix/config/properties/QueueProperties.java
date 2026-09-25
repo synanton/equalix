@@ -20,4 +20,7 @@ public class QueueProperties {
 
     @NestedConfigurationProperty
     private CmsProperties cms = new CmsProperties();
+
+    @NestedConfigurationProperty
+    private VirtualTimeProperties virtualTime = new VirtualTimeProperties();
 }
