@@ -7,7 +7,7 @@
 [![Maven](https://img.shields.io/badge/build-maven-blue)](https://maven.apache.org/)
 [![License Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-**Equalix** is a **weighted-fair scheduler** for high-throughput multi-tenant systems.
+**Equalix** is an **eventually-fair weighted-fair scheduler** for high-throughput multi-tenant systems.
 It uses persistent virtual-time scheduling and probabilistic accounting to maximise throughput while giving every fairness key (tenant, client, user) its **weighted share** of a shared executor. In a measured run with continuously backlogged tenants, no tenant was ever more than two tasks off its weighted share, in any window.
 Think of it as the **fairness layer** between your task queue and your rate-limited executor.
 
