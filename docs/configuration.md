@@ -99,7 +99,21 @@ app:
       redis:
         key-namespace: equalix:cms
         fallback-to-local: true       # Fall back to in-memory sketch if Redis is down
+      error-sampling:
+        enabled: false                # Sample e_k = estimate - in-flight tasks (load tests)
+        interval-ms: 1000
 ```
+
+The CMS error depends on the number of tasks **currently in flight** (N), not on the number of keys. It never
+underestimates, and it overestimates by at most `2N / width` with probability `1 - 2^-depth`. With the
+defaults (65536×5) and 5,000 tasks in flight, measured error was 0 even with 50,000 keys. See
+[mathematical invariants §20](src/mathematical-invariants3.md) for the measured distribution.
+
+`error-sampling.enabled` turns on `CmsErrorSamplingScheduler`, which compares the sketch with the task table
+every `interval-ms` and publishes `equalix.cms.estimation.error{direction}` and
+`equalix.cms.estimation.error.magnitude` (p50/p95/p99). Each sample runs one `GROUP BY` over in-flight tasks,
+so it is meant for load tests rather than always-on use. With the local CMS, each instance samples its own
+sketch.
 
 Sizing guidance:
 

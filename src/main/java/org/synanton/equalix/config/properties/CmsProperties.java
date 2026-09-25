@@ -24,6 +24,9 @@ public class CmsProperties {
     @NestedConfigurationProperty
     private RedisProperties redis = new RedisProperties();
 
+    @NestedConfigurationProperty
+    private ErrorSamplingProperties errorSampling = new ErrorSamplingProperties();
+
     @Data
     public static class RedisProperties {
 
@@ -32,5 +35,15 @@ public class CmsProperties {
 
         /** Fall back to the local in-memory CMS if Redis is unreachable. */
         private boolean fallbackToLocal = true;
+    }
+
+    /** Periodic sampling of the CMS estimation error against the task table (EQX-2); meant for load tests. */
+    @Data
+    public static class ErrorSamplingProperties {
+
+        private boolean enabled;
+
+        /** Delay between samples; each sample runs one GROUP BY over in-flight tasks. */
+        private long intervalMs;
     }
 }

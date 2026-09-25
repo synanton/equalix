@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,5 +69,22 @@ class MicrometerPerformanceMonitorAdapterTest {
     void shouldRegisterCurrentRpsGauge() {
         assertThat(registry.find("equalix.adaptive.rps").gauge()).isNotNull();
         assertThat(registry.find("equalix.adaptive.rps").gauge().value()).isEqualTo(12.0);
+    }
+
+    @Test
+    void shouldPublishCmsErrorByDirectionAndMagnitude() {
+        adapter.recordCmsEstimationError(3L);
+        adapter.recordCmsEstimationError(-2L);
+        adapter.recordCmsEstimationError(0L);
+        adapter.recordCmsEstimationError(1L);
+
+        var over = registry.find("equalix.cms.estimation.error").tag("direction", "over").summary();
+        var under = registry.find("equalix.cms.estimation.error").tag("direction", "under").summary();
+        var exact = registry.find("equalix.cms.estimation.error").tag("direction", "exact").summary();
+        var magnitude = registry.find("equalix.cms.estimation.error.magnitude").summary();
+        assertThat(List.of(over.count(), under.count(), exact.count(), magnitude.count()))
+            .containsExactly(2L, 1L, 1L, 4L);
+        assertThat(List.of(over.totalAmount(), under.max(), magnitude.totalAmount()))
+            .containsExactly(4.0, 2.0, 6.0);
     }
 }

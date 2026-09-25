@@ -68,6 +68,11 @@ app:
       redis:
         key-namespace: equalix:cms
         fallback-to-local: true
+      error-sampling:
+        # Periodically sample e_k = CMS estimate - in-flight tasks and publish equalix.cms.estimation.error*
+        # (EQX-2). Meant for load tests: each sample runs a GROUP BY over in-flight tasks.
+        enabled: false
+        interval-ms: 1000
     sequential:
       enabled: true
       client-block-timeout-ms: 60000
