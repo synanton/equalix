@@ -16,6 +16,14 @@ app:
 
 The worker must expose `POST {base-url}/tasks/{id}/execute` and call Equalix `/complete` when done.
 
+## Scheduling
+
+```yaml
+app:
+  scheduling:
+    enabled: true                      # false: no scheduled jobs (tests, ingest-only nodes)
+```
+
 ## Queue
 
 ```yaml

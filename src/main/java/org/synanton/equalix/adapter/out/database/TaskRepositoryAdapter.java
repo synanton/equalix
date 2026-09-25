@@ -56,7 +56,7 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
 
     @Override
     public List<Task> findTasksWaitingForPreviousResult() {
-        return jpaRepository.findTasksWaitingForPreviousResult()
+        return jpaRepository.findTasksWaitingForPreviousResult(TaskStatus.QUEUED)
             .stream().map(this::toDomain).toList();
     }
 

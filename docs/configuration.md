@@ -14,6 +14,17 @@ app:
 Set `EQUALIX_API_KEY` in every non-local environment. Datasource credentials come from
 `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD`.
 
+## Scheduling
+
+```yaml
+app:
+  scheduling:
+    enabled: true   # Runs the priority calculator, dispatchers, watchdog and recovery jobs
+```
+
+Set it to `false` for a node that should only ingest and receive completions. Integration tests also set it
+to `false` and drive the jobs directly.
+
 ## Root
 
 ```yaml

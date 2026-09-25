@@ -52,14 +52,16 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
     Optional<TaskEntity> findByFairnessKeyAndSequenceNumberAndStatus(
         String fairnessKey, Long sequenceNumber, TaskStatus status);
 
+    // Status is bound as a parameter: an enum literal in JPQL renders as '...'::TaskStatus, which is not the
+    // PostgreSQL type name (task_status).
     @Query("""
         SELECT t FROM TaskEntity t
         WHERE t.requiresPreviousResult = true
           AND t.previousResult IS NULL
-          AND t.status = org.synanton.equalix.domain.model.TaskStatus.QUEUED
+          AND t.status = :status
           AND t.dependsOnTaskId IS NOT NULL
         """)
-    List<TaskEntity> findTasksWaitingForPreviousResult();
+    List<TaskEntity> findTasksWaitingForPreviousResult(@Param("status") TaskStatus status);
 
     @Modifying
     @Query("UPDATE TaskEntity t SET t.status = :newStatus, t.updatedAt = CURRENT_TIMESTAMP WHERE t.id IN :ids")
