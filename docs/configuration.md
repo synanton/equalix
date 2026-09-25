@@ -97,7 +97,7 @@ app:
       width: 65536                    # ε = 2 / width
       depth: 5                        # δ = (1/2)^depth
       redis:
-        key-namespace: equalix:cms
+        key-namespace: equalix:cms    # Redis keys: {namespace}:v2 and {namespace}:v2:total
         fallback-to-local: true       # Fall back to in-memory sketch if Redis is down
       error-sampling:
         enabled: false                # Sample e_k = estimate - in-flight tasks (load tests)

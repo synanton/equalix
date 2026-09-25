@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.synanton.equalix.domain.model.CmsErrorStatistics;
 import org.synanton.equalix.domain.port.in.TaskCompletionPort;
 import org.synanton.equalix.domain.port.in.TaskIngestionPort;
+import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.service.CmsErrorRecorder;
 import org.synanton.equalix.domain.service.DispatcherService;
 import org.synanton.equalix.domain.service.PriorityCalculatorService;
@@ -24,8 +25,8 @@ import org.synanton.equalix.domain.service.PriorityCalculatorService;
 /**
  * EQX-2: the error recorder compares the live sketch with in-flight tasks and publishes Prometheus metrics.
  *
- * <p>Keys ending in "Aa" and "BB" with the same prefix have equal {@code String.hashCode()}, so they share every
- * sketch cell: the idle key is overestimated by the other key's in-flight count.
+ * <p>Drift is injected as a phantom +3 on an idle key, applied outside any transaction, as a crash between the
+ * database commit and the sketch update would leave it.
  *
  * <p>{@link AutoConfigureObservability} is required because Spring Boot disables metrics export in tests.
  */
@@ -52,12 +53,14 @@ class CmsErrorRecorderIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private CmsErrorRecorder cmsErrorRecorder;
 
+    @Autowired
+    private CMSProviderPort cms;
+
     @Test
     void shouldSampleEstimationErrorAndPublishPrometheusMetrics() throws Exception {
         String prefix = "cms-" + UUID.randomUUID().toString().substring(0, 8) + "-";
-        String busyKey = prefix + "BB";
-        String idleKey = prefix + "Aa";
-        assertThat(busyKey.hashCode()).isEqualTo(idleKey.hashCode());
+        String busyKey = prefix + "busy";
+        String idleKey = prefix + "idle";
         for (int index = 0; index < 3; index++) {
             taskIngestion.createTask(busyKey, BigDecimal.ONE, PAYLOAD, false, null, null, false);
         }
@@ -68,10 +71,11 @@ class CmsErrorRecorderIntegrationTest extends BaseIntegrationTest {
         priorityCalculatorService.run();
         dispatcherService.dispatch();
         taskCompletion.completeTask(idleTask, true, null, null);
+        cms.add(idleKey, 3);
 
         CmsErrorStatistics statistics = cmsErrorRecorder.sample();
 
-        // Busy key: 3 in flight and estimated 3. Idle key: 0 in flight but estimated 3 through the shared cells.
+        // Busy key: 3 in flight and estimated 3. Idle key: 0 in flight but estimated 3.
         assertThat(sent).hasSize(4);
         assertThat(List.of(statistics.count(), statistics.min(), statistics.max()))
             .containsExactly(2L, 0L, 3L);

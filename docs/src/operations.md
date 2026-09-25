@@ -35,8 +35,8 @@ Before the rebuild, the watchdog compares the sketch with the task table. It use
 
 **What to expect.** With the default 65536×5 sketch and correct accounting, drift is 0 for every key (measured in EQX-2, [mathematical invariants §20](mathematical-invariants3.md)). Sustained non-zero drift is a signal, not noise:
 
-- `_min < 0` (underestimation) is never produced by the sketch itself. It means an accounting fault: a CMS −1 without its DB change, e.g. a completion transaction that rolled back after updating the CMS and was then retried.
-- `_max > 0` on keys with nothing in flight points to a phantom +1 (a dispatch transaction that rolled back), or to fairness keys whose `String.hashCode()` values collide. Collision drift survives the rebuild and shows up at every run for the same key pair.
+- `_min < 0` (underestimation) is never produced by the sketch itself. It means a −1 without its DB change, or a lost +1. CMS updates apply only after their transaction commits, so the remaining cause is a crash between the commit and the sketch update.
+- `_max > 0` on keys with nothing in flight means a +1 without its DB change. Each rebuild clears such drift, so it should not recur at every run for the same key.
 - With a small sketch, some overestimation is normal. Use the measured p99 (for example 4 at 1024×3 with 5,000 tasks in flight) as the noise floor.
 
 Example alert rules:
@@ -51,6 +51,10 @@ Example alert rules:
 - alert: EqualixCmsDriftStale
   expr: time() - max(equalix_cms_estimation_drift_timestamp_seconds) > 900
 ```
+
+**Restarts and deploys.** When an instance becomes ready it rebuilds its sketch from in-flight tasks, so the first measurement after a restart is not polluted by an empty sketch.
+
+**Redis layout v2.** Keys use 64-bit hashing, and the Redis sketch lives at `{key-namespace}:v2` and `{key-namespace}:v2:total`. During a rolling deploy, old and new instances use separate hashes. Once every instance runs the new version, delete the old keys: `DEL equalix:cms equalix:cms:total` with the default namespace.
 
 **Multiple instances.** The watchdog runs on whichever instance holds its ShedLock, and each instance exports only its own last measurement. With `cms.mode=local`, every instance has its own sketch, so the drift describes the sketch of the instance that ran the watchdog. Aggregate across instances with `max(...)`, and use `_timestamp_seconds` to find the freshest measurement. With `cms.mode=redis`, all instances share one sketch.
 
