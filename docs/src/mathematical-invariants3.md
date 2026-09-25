@@ -160,6 +160,35 @@ lim sup⁡∣W∣→∞ϵmax⁡(W)≤ϵ∣W∣→∞limsupϵmax(W)≤ϵ
 where ϵϵ is an experimentally established error bound.
 The value of ϵϵ should be measured rather than assumed.
 
+### Measured bound (EQX-1)
+
+`ProportionalFairnessIntegrationTest` runs the real priority calculator and dispatcher against PostgreSQL with three continuously backlogged tenants, wA : wB : wC = 1 : 2 : 7. The conditions follow §5: no quotas, adaptive RPS off, and no anti-starvation promotion. Each tick dispatches up to 20 tasks, and every dispatched task is completed and replaced. Two scenarios run for 10,000 dispatches each:
+
+- **No pressure:** dispatched tasks complete within the tick, so only virtual time Tk orders the queue.
+- **With pressure:** dispatched tasks are still in flight at the next priority calculation, so the CMS pressure term p·F̂k/wk is active.
+
+Prefix ϵmax is measured over the first W dispatches. Sliding ϵmax is the worst over every contiguous window of W dispatches.
+
+| W | No pressure: prefix | No pressure: sliding | With pressure: prefix | With pressure: sliding |
+|---|---|---|---|---|
+| 10 | 0 | 0 | 0 | 0.10 |
+| 25 | 0.02 | 0.02 | 0.02 | 0.06 |
+| 100 | 0 | 0 | 0 | 0.01 |
+| 1,000 | 0 | 0 | 0 | 0.001 |
+| 10,000 | 0 | 0 | 0 | 0 |
+
+At W = 10,000 the observed shares are exactly SA = 10%, SB = 20%, SC = 70%. The results are deterministic across runs.
+
+In task counts, the error is at most 0.5 task without pressure. That is the rounding floor, because W·Ek is not always a whole number. With pressure it is at most 1.5 tasks. The asserted empirical bound is therefore:
+
+ϵmax(W) ≤ 2 / |W|
+
+This means no tenant is ever more than two tasks ahead of or behind its weighted share, in any window. For W = 10,000 this gives ϵ ≤ 0.0002.
+
+As a control, the same experiment with the virtual-time term disabled (`quantum = 0`) gives shares of 33/33/33 without pressure and 0.4/0.4/99.2 with pressure only. So the persistent Tk (§7) is what makes the weighted shares hold.
+
+Scope: the bound covers equal-cost tasks under the conditions of §5. Quota-constrained keys (§25.6), aging (EQX-4) and hierarchical keys (EQX-7) need to be measured again with the same harness.
+
 ------
 
 ## 7. Virtual Time (Persistent Fairness State)
@@ -772,7 +801,7 @@ What data structure provides useful and defensible error bounds when counters ca
 
 What constitutes a "sufficiently large" window WW?
 
-**Plan:** This will be determined experimentally via simulation and production benchmarks.
+**Measured (EQX-1):** Under continuous backlog, weighted shares hold to within 2 tasks over any window (ϵmax(W) ≤ 2/|W|, see §6). Windows of a few hundred dispatches are therefore already within 1%. Production benchmarks with irregular arrivals are still pending.
 
 ### 25.6 Fairness under quota constraints
 
@@ -802,7 +831,7 @@ Model→Simulation→Implementation→Benchmark→RefinementModel→Simulation�
 
 Before claiming a formal guarantee, Equalix should validate the corresponding invariant through simulation and load testing.
 
-The most important next experiment is to demonstrate weighted fairness:
+The most important next experiment is to demonstrate weighted fairness (done in EQX-1, see §6 for the measured bound):
 
 wA:wB:wC=1:2:7wA:wB:wC=1:2:7
 
@@ -843,4 +872,5 @@ This is the proposed mathematical foundation for Equalix v0.2.
 **Revision history:**
 
 - v0.1 – initial draft.
+- v0.3 – persistent virtual time Tk implemented (EQX-3); weighted-fairness bound ϵmax(W) ≤ 2/|W| measured (EQX-1).
 - v0.2 – clarified notation (leaves LkLk), added infinite quota semantics, expanded CMS caveat with practical  mitigation, added stability as an open question, and aligned the model  with the intended persistent virtual time design.

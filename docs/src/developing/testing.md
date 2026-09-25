@@ -17,7 +17,15 @@ Package: `org.synanton.equalix.integration`.
 - Talk through HTTP (`MockMvc`) or inbound messages
 - `@MockBean` / `@MockitoBean` only on `adapter.out` collaborators (remote executor)
 - `deleteAll()` on repositories in `BaseIntegrationTest` only
-- Scheduling and Kafka listener **off** in test YAML so jobs do not race `deleteAll`
+- Scheduling (`app.scheduling.enabled: false`) and the Kafka listener are **off** in test YAML. Tests drive `PriorityCalculatorService` and `DispatcherService` directly, so jobs neither race `deleteAll` nor make results nondeterministic.
+
+## Fairness experiment (EQX-1)
+
+`ProportionalFairnessIntegrationTest` checks the weighted-fairness invariant end to end. It uses three backlogged tenants with weights 1/2/7 and runs 10,000 dispatches, with and without in-flight pressure. It asserts ϵmax(W) ≤ 2/|W| for W ∈ {10, 25, 100, 1,000, 10,000}. The measures (expected share, prefix and sliding-window error) are in `org.synanton.equalix.fairness.FairnessStatistics`, and the measured table is in [Mathematical invariants §6](../mathematical-invariants3.md). The test takes about 20 s per scenario. Run it again after any change to priority, dispatch or virtual time:
+
+```bash
+mvn test -Dtest=ProportionalFairnessIntegrationTest
+```
 
 ## What to add when you change behaviour
 
