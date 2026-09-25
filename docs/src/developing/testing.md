@@ -48,6 +48,11 @@ python3 docs/samples/plot_cms_error.py
 
 `AdaptiveRpsStabilitySimulationTest` drives the real `AdaptiveRpsController` with a `ManualClock` in closed loop against a modelled executor. It covers four workloads (transient spikes, long spikes, capacity loss, low-rate noisy) and seven parameter sets, and asserts no collapse, no overload and damped oscillation for the recommended defaults. Results are logged as `EQX-6 <workload> <configuration> -> ...`.
 
+## Hierarchical fairness (EQX-7)
+
+- `HierarchicalSelectorTest` checks the pure selection algorithm: sibling alternation, organization bound, weights, idle floors, promoted-first and quota, plus 10,000-dispatch simulations.
+- `HierarchicalFairnessIntegrationTest` runs the EQX-1 harness in hierarchical mode against PostgreSQL. It checks that a hot department cannot starve its sibling, that an organization stays bounded against a single-leaf tenant, that a new sibling is served in the next tick, and that the Prometheus series appear.
+
 Integration tests get an `AdjustableClock` (from `BaseIntegrationTest`). It is frozen at context start and reset before each test. Call `clock.advance(...)` to make tasks age.
 
 ## What to add when you change behaviour

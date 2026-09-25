@@ -21,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.synanton.equalix.config.properties.WatchdogProperties;
 import org.synanton.equalix.domain.model.CmsDriftReport;
+import org.synanton.equalix.domain.model.FairnessMode;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientCountsRepositoryPort;
 import org.synanton.equalix.domain.port.out.PerformanceMonitorPort;
@@ -49,7 +50,8 @@ class WatchdogServiceTest {
         WatchdogProperties props = new WatchdogProperties();
         props.setDriftMetricMaxKeys(10);
         watchdogService = new WatchdogService(taskRepository, clientCounts, cms, cmsErrorRecorder,
-            performanceMonitor, props, Clock.fixed(NOW, ZoneOffset.UTC));
+            performanceMonitor, props, FairnessHierarchyTest.hierarchy(FairnessMode.FLAT, Map.of()),
+            Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
@@ -102,8 +104,30 @@ class WatchdogServiceTest {
 
         InOrder order = inOrder(performanceMonitor, cms);
         order.verify(performanceMonitor).publishCmsDrift(new CmsDriftReport(NOW, 3, 2, 2, -1, 3,
-            Map.of("phantom", 2L, "under", -1L)));
+            Map.of("phantom", 2L, "under", -1L), Map.of("phantom", "key", "under", "key"), Map.of("key", 3L)));
         order.verify(cms).rebuild(inFlight);
+    }
+
+    @Test
+    void shouldMeasureDriftOfInternalNodesAndRootInHierarchicalMode() {
+        WatchdogProperties props = new WatchdogProperties();
+        props.setDriftMetricMaxKeys(10);
+        WatchdogService hierarchical = new WatchdogService(taskRepository, clientCounts, cms, cmsErrorRecorder,
+            performanceMonitor, props, FairnessHierarchyTest.hierarchy(FairnessMode.HIERARCHICAL, Map.of()),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+        Map<String, Integer> inFlight = Map.of("acme/sales", 2, "acme/it", 1);
+        when(taskRepository.countInFlightByFairnessKey()).thenReturn(inFlight);
+        when(clientCounts.findAllAsMap()).thenReturn(inFlight);
+        when(cmsErrorRecorder.measureDrift(Map.of("acme/sales", 2, "acme/it", 1, "acme/", 3, "", 3),
+            Set.of("acme/sales", "acme/it", "acme/", "")))
+            .thenReturn(Map.of("acme/sales", 0L, "acme/it", 0L, "acme/", 1L, "", 1L));
+
+        hierarchical.reconcile();
+
+        verify(performanceMonitor).publishCmsDrift(new CmsDriftReport(NOW, 4, 2, 1, 0, 2,
+            Map.of("acme/", 1L, "", 1L), Map.of("acme/", "organization", "", "root"),
+            Map.of("organization", 1L, "department", 0L, "root", 1L)));
+        verify(cms).rebuild(inFlight);
     }
 
     @Test

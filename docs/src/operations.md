@@ -27,11 +27,12 @@ Before the rebuild, the watchdog compares the sketch with the task table. It use
 
 | Metric | Meaning |
 |--------|---------|
-| `equalix_cms_estimation_drift{fairnessKey}` | Drift of one key. Only keys with non-zero drift, largest `\|drift\|` first, at most `app.watchdog.drift-metric-max-keys`. A key's series is **removed** when it stops drifting, so an absent series means 0. |
+| `equalix_cms_estimation_drift{fairnessKey,layer}` | Drift of one key or, in hierarchical mode, one internal node (`acme/`) or the root (`""`); `layer` is its layer name, or `key` in flat mode. Only keys with non-zero drift, largest `\|drift\|` first, at most `app.watchdog.drift-metric-max-keys`. A key's series is **removed** when it stops drifting, so an absent series means 0. |
 | `equalix_cms_estimation_drift_max` / `_min` | Largest overestimate, and largest underestimate as a negative number, over all keys |
-| `equalix_cms_estimation_drift_absolute_total` | Sum of `\|drift\|` over all keys |
+| `equalix_cms_estimation_drift_absolute` | Sum of `\|drift\|` over all keys |
 | `equalix_cms_estimation_drift_keys` / `_keys_sampled` | Keys with non-zero drift / keys compared |
 | `equalix_cms_estimation_drift_timestamp_seconds` | When this instance last measured drift (0 before its first run) |
+| `equalix_cms_estimation_drift_layer_absolute{layer}` | Sum of `\|drift\|` per layer |
 
 **What to expect.** With the default 65536×5 sketch and correct accounting, drift is 0 for every key (measured in EQX-2, [mathematical invariants §20](mathematical-invariants3.md)). Sustained non-zero drift is a signal, not noise:
 
@@ -46,7 +47,7 @@ Example alert rules:
   expr: max(equalix_cms_estimation_drift_min) < 0
   for: 15m          # three watchdog runs
 - alert: EqualixCmsPersistentDrift
-  expr: max(equalix_cms_estimation_drift_absolute_total) > 0
+  expr: max(equalix_cms_estimation_drift_absolute) > 0
   for: 30m
 - alert: EqualixCmsDriftStale
   expr: time() - max(equalix_cms_estimation_drift_timestamp_seconds) > 900
@@ -57,6 +58,20 @@ Example alert rules:
 **Redis layout v2.** Keys use 64-bit hashing, and the Redis sketch lives at `{key-namespace}:v2` and `{key-namespace}:v2:total`. During a rolling deploy, old and new instances use separate hashes. Once every instance runs the new version, delete the old keys: `DEL equalix:cms equalix:cms:total` with the default namespace.
 
 **Multiple instances.** The watchdog runs on whichever instance holds its ShedLock, and each instance exports only its own last measurement. With `cms.mode=local`, every instance has its own sketch, so the drift describes the sketch of the instance that ran the watchdog. Aggregate across instances with `max(...)`, and use `_timestamp_seconds` to find the freshest measurement. With `cms.mode=redis`, all instances share one sketch.
+
+## Hierarchical isolation (EQX-7)
+
+In hierarchical mode, `equalix_hierarchy_dispatches_total{layer,node}` counts dispatched tasks for every
+node in the first `app.hierarchical.metrics-depth` layers (default 1: organizations). A node's share of its
+parent's service is its rate over the sum of its siblings' rates. For example, the share of each organization:
+
+```promql
+sum by (node) (rate(equalix_hierarchy_dispatches_total{layer="organization"}[5m]))
+  / scalar(sum(rate(equalix_hierarchy_dispatches_total{layer="organization"}[5m])))
+```
+
+For backlogged organizations, this should match their weight share. Raising `metrics-depth` adds one series
+per department, so watch cardinality.
 
 ## Timeouts and blocks
 

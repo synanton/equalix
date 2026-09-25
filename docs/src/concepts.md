@@ -2,7 +2,9 @@
 
 ## Fairness key
 
-A string that names the group Equalix balances: tenant id, customer id, or project id. All scheduling and quotas are per key. The `client_counts` table still uses that historical name.
+A string that names the group Equalix balances: tenant id, customer id, or project id. Quotas are per key. The `client_counts` table still uses that historical name.
+
+In the default `flat` mode every key is an independent tenant. In `hierarchical` mode a key is a path such as `acme/sales`; see [Hierarchical fairness](#hierarchical-fairness).
 
 ## Weight
 
@@ -54,6 +56,27 @@ Latency is the mean of the completions since the previous adjustment, smoothed b
 ## Sequential mode
 
 If `sequential=true` and `sequenceNumber` is set, Equalix runs **one task at a time** for that key, in sequence order. Other keys still run in parallel. Failure **blocks** the key until `ClientBlockRecoveryService` unblocks after `client-block-timeout-ms`.
+
+## Hierarchical fairness
+
+With `app.queue.fairness-mode: hierarchical`, fairness keys are paths through a tenant tree. The layers come from `app.hierarchical.layers`, by default organization → department:
+
+- `acme/sales` belongs to organization `acme/`;
+- `smallclub` (one segment) competes directly with `acme/` at the top;
+- segments beyond the last layer fold into it.
+
+Every layer is fair among its backlogged siblings:
+
+- `acme/` and `smallclub` split the system 50/50 (at equal weight), however many departments `acme` has;
+- inside `acme`, `acme/sales` and `acme/it` split `acme`'s share, however large either backlog is.
+
+The dispatcher selects tasks at dispatch time, walking down the tree and choosing the child with the least virtual runtime at each layer. Weights:
+
+- a leaf uses its tasks' weight;
+- other nodes use their layer's `default-weight`;
+- `app.hierarchical.weights` overrides either, for example `"[acme]": 2.0`.
+
+Keys must not contain empty segments (`acme//sales`, `acme/`). Aging is ignored in this mode; the `max-queued-time-ms` promotion still applies.
 
 ## Anti-starvation
 

@@ -26,4 +26,10 @@ public interface PerformanceMonitorPort {
      * Keys absent from {@link CmsDriftReport#topDrifting()} are treated as having no drift.
      */
     void publishCmsDrift(CmsDriftReport report);
+
+    /**
+     * Counts one dispatched task for a hierarchy node (EQX-7), for isolation dashboards: a node's share of its
+     * parent is its counter rate over the sum of its siblings' rates.
+     */
+    void recordHierarchicalDispatch(String layer, String nodeKey);
 }

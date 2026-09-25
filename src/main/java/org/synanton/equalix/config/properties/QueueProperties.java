@@ -2,6 +2,7 @@ package org.synanton.equalix.config.properties;
 
 import jakarta.validation.Valid;
 import lombok.Data;
+import org.synanton.equalix.domain.model.FairnessMode;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 import org.springframework.validation.annotation.Validated;
@@ -20,6 +21,9 @@ public class QueueProperties {
     private long maxQueuedTimeMs;
     private long taskTimeoutMs;
     private int maxPayloadBytes;
+
+    /** {@code flat} (default) or {@code hierarchical}; see {@link HierarchicalProperties}. */
+    private FairnessMode fairnessMode;
 
     @NestedConfigurationProperty
     private CmsProperties cms = new CmsProperties();

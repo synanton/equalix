@@ -51,6 +51,7 @@ app:
     max-queued-time-ms: 60000         # Anti-starvation deadline
     task-timeout-ms: 300000           # In-flight tasks older than this become TIMEOUT (0 = off)
     max-payload-bytes: 1048576        # Ingest payload cap
+    fairness-mode: flat               # flat | hierarchical (EQX-7)
     virtual-time:
       quantum: 1000                   # Virtual-time units charged per task at weight 1.0 (advance = quantum / weight)
     aging:
@@ -86,6 +87,39 @@ deprioritizes heavy keys, but nothing prevents them from monopolizing dispatch s
 
 When `app.adaptive-rps.enabled` is true, each dispatcher tick is also capped by
 `ceil(currentRps × dispatcher-interval / 1000)`.
+
+## Hierarchical fairness
+
+```yaml
+app:
+  queue:
+    fairness-mode: hierarchical
+  hierarchical:
+    separator: /                      # Splits fairness keys into path segments
+    layers:                           # From the root down
+      - name: organization
+        default-weight: 1.0
+      - name: department
+        default-weight: 1.0
+    weights:                          # Per-node overrides; bracket keys that contain the separator
+      "[acme]": 2.0
+      "[acme/sales]": 3.0
+    metrics-depth: 1                  # Layers with equalix.hierarchy.dispatches{layer,node} counters
+```
+
+- **Keys map onto layers.** `acme/sales` maps to organization `acme/` and department `acme/sales`. Segments
+  beyond the last layer fold into the leaf, and a one-segment key is a leaf directly under the root.
+- **Weights.** A leaf uses its tasks' weight and other nodes use their layer's `default-weight`, unless
+  `weights` overrides it.
+- **Keys must be unambiguous.** They must not contain empty segments. A key must also not be both a leaf and
+  the parent of other keys (e.g. both `acme` and `acme/sales`): both would compete at the root.
+- **Switching modes.** `flat` and `hierarchical` keep separate scheduling state. Switching modes starts the
+  other mode's fairness history from scratch; nothing breaks.
+- **Aging** is ignored in hierarchical mode (a warning is logged). `max-queued-time-ms` promotion still
+  applies.
+- **Cost per tick.** The dispatcher groups queued tasks by key, loads node state for the keys it finds, and
+  locks the planned number of tasks per key. With `cms.mode: redis`, the pressure lookup costs one round trip
+  per node per tick.
 
 ## Count-Min Sketch
 

@@ -31,6 +31,7 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
     private final AtomicLong driftKeys = new AtomicLong();
     private final AtomicLong driftKeysSampled = new AtomicLong();
     private final AtomicLong driftMeasuredAtEpochSecond = new AtomicLong();
+    private final Map<String, AtomicLong> driftByLayer = new HashMap<>();
 
     public MicrometerPerformanceMonitorAdapter(
         MeterRegistry meterRegistry,
@@ -43,7 +44,7 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
         registerDriftAggregate(DRIFT + ".max", driftMax, "Largest CMS overestimate at the last watchdog run");
         registerDriftAggregate(DRIFT + ".min", driftMin,
             "Largest CMS underestimate (negative) at the last watchdog run");
-        registerDriftAggregate(DRIFT + ".absolute.total", driftAbsoluteTotal,
+        registerDriftAggregate(DRIFT + ".absolute", driftAbsoluteTotal,
             "Sum of |drift| over all sampled keys at the last watchdog run");
         registerDriftAggregate(DRIFT + ".keys", driftKeys, "Keys with non-zero CMS drift at the last watchdog run");
         registerDriftAggregate(DRIFT + ".keys.sampled", driftKeysSampled,
@@ -105,8 +106,12 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
                 existing.remove();
             }
         }
-        reported.forEach((fairnessKey, drift) ->
-            driftGauges.computeIfAbsent(fairnessKey, this::registerDriftGauge).value().set(drift));
+        reported.forEach((fairnessKey, drift) -> driftGauges
+            .computeIfAbsent(fairnessKey, key -> registerDriftGauge(key, report.layers().get(key)))
+            .value().set(drift));
+        driftByLayer.values().forEach(total -> total.set(0));
+        report.absoluteDriftByLayer().forEach((layer, total) ->
+            driftByLayer.computeIfAbsent(layer, this::registerLayerDriftGauge).set(total));
 
         driftMax.set(report.maxDrift());
         driftMin.set(report.minDrift());
@@ -116,13 +121,34 @@ public class MicrometerPerformanceMonitorAdapter implements PerformanceMonitorPo
         driftMeasuredAtEpochSecond.set(report.measuredAt().getEpochSecond());
     }
 
-    private DriftGauge registerDriftGauge(String fairnessKey) {
+    @Override
+    public void recordHierarchicalDispatch(String layer, String nodeKey) {
+        Counter.builder("equalix.hierarchy.dispatches")
+            .description("Tasks dispatched per hierarchy node, for layers within app.hierarchical.metrics-depth")
+            .tag("layer", layer)
+            .tag("node", nodeKey)
+            .register(meterRegistry)
+            .increment();
+    }
+
+    private DriftGauge registerDriftGauge(String fairnessKey, String layer) {
         AtomicLong value = new AtomicLong();
         Gauge gauge = Gauge.builder(DRIFT, value, AtomicLong::get)
-            .description("CMS estimate minus in-flight tasks per fairness key at the last watchdog run")
+            .description("CMS estimate minus in-flight tasks per fairness key or hierarchy node at the last "
+                + "watchdog run")
             .tag("fairnessKey", fairnessKey)
+            .tag("layer", layer == null ? CmsDriftReport.FLAT_LAYER : layer)
             .register(meterRegistry);
         return new DriftGauge(gauge, value);
+    }
+
+    private AtomicLong registerLayerDriftGauge(String layer) {
+        AtomicLong value = new AtomicLong();
+        Gauge.builder(DRIFT + ".layer.absolute", value, AtomicLong::get)
+            .description("Sum of |drift| per hierarchy layer at the last watchdog run")
+            .tag("layer", layer)
+            .register(meterRegistry);
+        return value;
     }
 
     private void registerDriftAggregate(String name, AtomicLong value, String description) {
