@@ -84,6 +84,9 @@ app:
     decrease-factor: 0.9
     increase-factor: 1.05
     increase-error-threshold: 0.01
+    adjustment-interval-ms: 2000
+    latency-ema-alpha: 0.7
+    direction-change-confirmations: 3
   watchdog:
     interval-minutes: 60
     # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).

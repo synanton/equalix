@@ -437,12 +437,14 @@ shared Redis hash, restoring accuracy for all instances simultaneously.
 
 ## 8. Adaptive RPS
 
-Sliding window of the last 100 completions. Every completion updates:
+Sliding window of the last 100 completions, and an evaluation at most every `adjustment-interval-ms`
+(default 2 s):
 
-- `avg_latency` - mean of window durations.
+- `latency` - mean duration of the completions since the previous evaluation, smoothed as
+  `smoothed = α·latency + (1−α)·smoothed` (`latency-ema-alpha`, default 0.7).
 - `error_rate` - fraction of failures/timeouts in the window.
 
-Adjustment rules:
+Adjustment rules, applied to the smoothed latency:
 
 | Condition                                                   | Action                              |
 |-------------------------------------------------------------|-------------------------------------|
@@ -450,6 +452,14 @@ Adjustment rules:
 | `avg_latency > target-latency-ms × 1.2`                     | `currentRps × 0.9`                  |
 | `avg_latency < target-latency-ms × 0.8` AND `error_rate < 1 %` | `currentRps × 1.05` up to `max-rps` |
 | Otherwise                                                   | No change                           |
+
+**Dead-band dampener.** Reversing direction (an increase after a decrease, or the opposite) requires
+`direction-change-confirmations` (default 3) consecutive evaluations that agree. An evaluation inside the
+dead band resets the count. The emergency brake is never dampened.
+
+With `adjustment-interval-ms: 0` the controller evaluates the whole window on every completion, as before
+EQX-6. That re-applies one spike's evidence up to `window-size` times and collapses the rate to `min-rps`.
+See invariants §25.7 for the simulation.
 
 `penaltyFactor = 1000 / currentRps`. When the remote system slows, the penalty factor grows and
 heavy fairness keys are pushed further into the future, automatically throttling dispatch
@@ -462,7 +472,7 @@ pressure.
 ### 9.1 Priority formula
 
 ```
-priority = current_time_ms + (inFlightCount × penaltyFactor / weight)
+priority = finishTag + (inFlightCount × penaltyFactor / weight)      -- finishTag: persistent virtual time, §5.5
 ```
 
 A fairness key with many in-flight tasks receives a larger priority offset, pushing its new

@@ -122,6 +122,19 @@ app:
     # If the observed error rate is equal to or greater than this value,
     # the controller will not increase RPS even if latency is low.
     increase-error-threshold: 0.01
+
+    # Stability controls (EQX-6). Setting alpha 1.0, interval 0 and confirmations 1 restores the
+    # pre-EQX-6 controller exactly, which re-applies a step on every completion and collapses to min-rps
+    # after one latency spike.
+    # Minimum time between two RPS adjustments. The latency signal is then the mean of the completions
+    # since the previous adjustment, and ramp-up becomes time-based (increase-factor per interval).
+    adjustment-interval-ms: 2000
+    # EMA weight of the newest latency measurement, in (0, 1]; 1 disables smoothing. It matters most for
+    # slow executors with only a few noisy samples per interval.
+    latency-ema-alpha: 0.7
+    # Consecutive agreeing evaluations required to reverse direction (increase after decrease or the
+    # opposite); 1 reverses immediately. The emergency brake is never dampened.
+    direction-change-confirmations: 3
   watchdog:
     interval-minutes: 5
     # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).

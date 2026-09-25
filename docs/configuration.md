@@ -157,7 +157,32 @@ app:
     decrease-factor: 0.9                   # Multiply when latency too high
     increase-factor: 1.05                  # Multiply when latency low & errors low
     increase-error-threshold: 0.01         # Max error rate allowed for increase
+    adjustment-interval-ms: 2000           # At most one RPS change per interval (0 = every completion)
+    latency-ema-alpha: 0.7                 # EMA weight of the newest latency measurement (1 = no smoothing)
+    direction-change-confirmations: 3      # Agreeing evaluations needed to reverse direction (1 = immediate)
 ```
+
+**Stability controls (EQX-6).** The pre-EQX-6 controller adjusted on every completion. One latency spike
+stays in the 100-sample window for 100 completions, so it was applied up to 100 times: ×0.9 per completion
+until `min-rps`. At that rate, the sample window then took minutes to refresh. In simulation it averaged
+2.2 rps against an ideal of 25. The three controls fix this:
+
+- `adjustment-interval-ms` limits changes to one per interval. Each evaluation uses the mean latency of the
+  completions since the previous one, so stale samples are never counted twice. This is the main fix.
+- `direction-change-confirmations` is the dead-band dampener: a reversal needs that many consecutive
+  agreeing evaluations. Returning to the dead band resets the count. The emergency brake (error rate above
+  `error-threshold`) bypasses it but is still limited to one step per interval.
+- `latency-ema-alpha` smooths the latency signal across evaluations. The smoothing time constant is about
+  `adjustment-interval-ms / alpha`.
+
+With the defaults, simulated over-throttling stays at or below 1.4% of the time, and load-induced overload
+at or below 0.3%, across transient spikes, long spikes, capacity loss and a slow noisy executor. See
+[mathematical invariants §25.7](src/mathematical-invariants3.md).
+
+Ramp-up is time-based: each interval can raise the rate by `increase-factor`. From `initial-rps: 1`,
+reaching 25 rps takes about 66 increases, roughly 2 minutes at a 2 s interval. Raise `initial-rps` or
+`increase-factor` if cold starts must be faster. `alpha: 1.0`, `interval: 0` and `confirmations: 1`
+reproduce the pre-EQX-6 controller exactly.
 
 `penaltyFactor = 1000 / currentRps` - the value the priority calculator uses to weight in-flight
 counts.

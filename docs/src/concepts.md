@@ -43,7 +43,13 @@ Approximate per-key in-flight counts in fixed memory. Never used for hard quotas
 
 ## Adaptive RPS
 
-A sliding window of the last 100 completions. High error rate halves `currentRps`; high latency multiplies by `0.9`; healthy low latency multiplies by `1.05` up to `max-rps`. The dispatcher also caps each tick by `ceil(currentRps × interval_seconds)` when adaptive RPS is enabled.
+The controller adjusts `currentRps` at most once every `adjustment-interval-ms` (2 s by default):
+
+- A high error rate halves it (emergency brake).
+- High latency multiplies it by `0.9`.
+- Healthy low latency multiplies it by `1.05`, up to `max-rps`.
+
+Latency is the mean of the completions since the previous adjustment, smoothed by an EMA (`latency-ema-alpha`). Reversing direction needs `direction-change-confirmations` consecutive agreeing evaluations, which stops short spikes from flipping the rate back and forth. The emergency brake is never delayed. The dispatcher also caps each tick by `ceil(currentRps × interval_seconds)` when adaptive RPS is enabled.
 
 ## Sequential mode
 
