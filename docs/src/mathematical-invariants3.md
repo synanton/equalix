@@ -907,7 +907,45 @@ R(t)R(t)
 
 when executor latency and error rates fluctuate?
 
-**Interim:** Hysteresis and smoothing are applied; formal stability analysis is a future task.
+**Evaluated (EQX-6):** Stability is achieved by rate-limiting the controller, dampening direction reversals, and smoothing the latency signal. A formal stability proof is still open.
+
+**Why the original controller over-throttled.** It re-evaluated its 100-completion window after *every* completion and applied a multiplicative step each time. One latency spike stays in the window for 100 completions, so it was applied up to 100 times (×0.9 each, or ×0.5 for the error brake) until R(t) hit `min-rps`. At that rate, the count-based window then took minutes to refresh. Smoothing or a dampener alone cannot fix this: both still act on every completion.
+
+**Controls.**
+
+- **Adjustment interval Δ:** R(t) changes at most once per Δ. Each evaluation uses the mean latency of the completions since the previous one.
+- **Latency EMA:** L̃ ← α·L + (1−α)·L̃. The time constant ≈ Δ/α, independent of the completion rate.
+- **Dead-band dampener:** a reversal needs c consecutive agreeing evaluations, and the dead band resets the count. The emergency brake bypasses it but is still limited to one step per Δ.
+
+**Simulation.** `AdaptiveRpsStabilitySimulationTest` runs the real controller in closed loop against an executor model:
+
+- latency base/(1 − ρ) with base 100 ms, target 200 ms and ±20% dead band, so the ideal operating point is ρ = 0.5;
+- log-normal noise on every sample;
+- errors when overloaded;
+- a 25-minute measurement.
+
+Four workloads:
+
+- *transient*: ×4 latency for 2 s every 20 s;
+- *long spikes*: ×4 for 10 s every 120 s;
+- *capacity loss*: capacity halves for 5 minutes;
+- *low-rate noisy*: capacity 6/s, σ = 0.8.
+
+Over-throttled means below half the ideal rate; overloaded means load-induced latency above twice the target.
+
+| Configuration (α, Δ, c) | Transient: over-throttled / reversals per h | Long spikes: over-throttled | Capacity loss: over-throttled / overloaded | Low-rate: over-throttled / reversals per h |
+|---|---|---|---|---|
+| stock (1, 0, 1) | 97.1% / 55 | 98.1% | 58.5% / 0.6% | 95.7% / 17 |
+| stock + EMA (0.7, 0, 1) | 96.9% / 55 | 97.9% | 58.3% / 0.6% | 95.7% / 17 |
+| stock + dampener (1, 0, 3) | 98.0% / 55 | 98.3% | 58.7% / 0.5% | 95.7% / 17 |
+| interval (1, 2 s, 1) | 0% / 353 | 3.9% | 0.1% / 0.3% | 0.3% / 377 |
+| interval + EMA (0.7, 2 s, 1) | 0% / 353 | 7.0% | 0.1% / 0.3% | 0% / 247 |
+| interval + dampener (1, 2 s, 3) | 0% / 0 | 0% | 0.3% / 0.3% | 1.1% / 72 |
+| **recommended (0.7, 2 s, 3)** | **0% / 60** | **0%** | **0.4% / 0.3%** | **0% / 62** |
+
+The stock controller runs at 2.2 rps on average against an ideal of 25, and at 0.5 rps against 3 in the low-rate case. The adjustment interval removes the collapse. The dampener cuts reversals under transient spikes and noise by 80–100%. The EMA mainly helps slow, noisy executors, where each interval holds only a few samples. On the high-rate spike workloads, α = 1 is marginally better, so α is a tuning choice. A 3×3×4 grid over Δ ∈ {0.5, 1, 2} s, α ∈ {1, 0.7, 0.5} and c ∈ {1…4} favoured Δ = 2 s: a longer interval gives one spike fewer steps. The recommended settings held on four further seeds, with over-throttling ≤ 1.4% and overload ≤ 0.3% in every workload. The simulation asserts these properties.
+
+**Coupling.** p(t) = 1000/R(t) feeds the priority pressure term (§9), so a steadier R(t) also steadies priorities. EQX-7's backpressure cascading should reuse these controls rather than add a second controller.
 
 ------
 
@@ -962,6 +1000,7 @@ This is the proposed mathematical foundation for Equalix v0.2.
 **Revision history:**
 
 - v0.1 – initial draft.
+- v0.8 – adaptive RPS stability controls (adjustment interval, latency EMA, direction dampener) evaluated by closed-loop simulation (EQX-6).
 - v0.7 – CMS updates applied after commit, 64-bit key hashing (Redis layout v2), startup warm-up; EQX-2 figures refreshed.
 - v0.6 – watchdog publishes CMS drift ek per key and in aggregate before each rebuild (EQX-5).
 - v0.5 – measured signed-update CMS error distribution and strict-turnstile bound; validated §17 priority-error bound; identified accounting-fault drift and hash-code collisions (EQX-2).

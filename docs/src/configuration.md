@@ -91,6 +91,9 @@ app:
     max-rps: 100
     target-latency-ms: 200
     error-threshold: 0.05
+    adjustment-interval-ms: 2000       # at most one RPS change per interval
+    latency-ema-alpha: 0.7             # latency smoothing (1 = off)
+    direction-change-confirmations: 3  # dead-band dampener (1 = off)
   watchdog:
     interval-minutes: 5
     drift-metric-max-keys: 100         # per-key drift series exported per run
