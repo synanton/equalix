@@ -16,7 +16,12 @@ import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientSequenceStateRepositoryPort;
 import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 
-/** Assigns fairness-weighted priority to RECEIVED tasks and moves them to QUEUED. */
+/**
+ * Assigns fairness-weighted priority to RECEIVED tasks and moves them to QUEUED.
+ *
+ * <p>Priority is {@code P = F + p * F̂_k / w}: the persistent weighted virtual finish tag F (see
+ * {@link VirtualTimeService}) plus the current in-flight pressure. Lower values are dispatched first.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -29,6 +34,7 @@ public class PriorityCalculatorService {
     private final ClientSequenceStateRepositoryPort sequenceStateRepository;
     private final CMSProviderPort cms;
     private final AdaptiveRpsController adaptiveRpsController;
+    private final VirtualTimeService virtualTimeService;
     private final QueueProperties queueProperties;
     private final Clock clock;
 
@@ -41,25 +47,25 @@ public class PriorityCalculatorService {
             return;
         }
 
-        long now = Instant.now(clock).toEpochMilli();
+        double systemVirtualTime = virtualTimeService.currentSystemVirtualTime();
         double penaltyFactor = adaptiveRpsController.getPenaltyFactor();
+        Instant now = Instant.now(clock);
 
+        // Tasks arrive ordered by creation time, so each key's finish tags follow its submission order.
         for (Task task : receivedTasks) {
-            long priority = calculatePriority(task, now, penaltyFactor);
+            double finishTag = virtualTimeService.assignFinishTag(task, systemVirtualTime);
+            long priority = calculatePriority(task, finishTag, penaltyFactor);
             task.setPriority(priority)
                 .setStatus(TaskStatus.QUEUED)
-                .setUpdatedAt(Instant.now(clock));
+                .setUpdatedAt(now);
             taskRepository.save(task);
         }
         log.debug("Calculated priorities for {} tasks", receivedTasks.size());
     }
 
-    private long calculatePriority(Task task, long now, double penaltyFactor) {
+    private long calculatePriority(Task task, double finishTag, double penaltyFactor) {
         long inFlight = cms.estimateCount(task.getFairnessKey());
-        double weight = task.getWeight() == null || task.getWeight().signum() <= 0
-            ? 1.0
-            : task.getWeight().doubleValue();
-        long basePriority = now + (long) (inFlight * penaltyFactor / weight);
+        long basePriority = Math.round(finishTag) + (long) (inFlight * penaltyFactor / task.effectiveWeight());
 
         if (!task.isSequential()) {
             return basePriority;

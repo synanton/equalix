@@ -40,7 +40,13 @@ app:
     max-queued-time-ms: 60000         # Anti-starvation deadline
     task-timeout-ms: 300000           # In-flight tasks older than this become TIMEOUT (0 = off)
     max-payload-bytes: 1048576        # Ingest payload cap
+    virtual-time:
+      quantum: 1000                   # Virtual-time units charged per task at weight 1.0 (advance = quantum / weight)
 ```
+
+`virtual-time.quantum` sets the scale of the persistent fairness term relative to the in-flight
+pressure term (`1000 / currentRps` per in-flight task). Larger values make historical weighted
+allocation dominate current load; smaller values let in-flight pressure matter more.
 
 `max-per-client-quota = 0` disables the per-key hard ceiling; the priority formula still
 deprioritizes heavy keys, but nothing prevents them from monopolizing dispatch slots.

@@ -28,6 +28,7 @@ public class SequentialDispatcherService {
     private final CMSProviderPort cms;
     private final ClientCountsRepositoryPort clientCounts;
     private final RemoteExecutorPort remoteExecutor;
+    private final VirtualTimeService virtualTimeService;
     private final Clock clock;
 
     @Transactional
@@ -75,6 +76,7 @@ public class SequentialDispatcherService {
         cms.add(state.getFairnessKey(), 1);
         clientCounts.incrementInFlight(state.getFairnessKey());
         remoteExecutor.send(nextTask.getId(), nextTask.getPayload(), previousResult);
+        virtualTimeService.recordDispatch(List.of(nextTask));
 
         log.debug("Dispatched sequential task {} seq={} for client {}",
             nextTask.getId(), nextTask.getSequenceNumber(), state.getFairnessKey());

@@ -13,6 +13,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.synanton.equalix.adapter.out.database.ClientCountsJpaRepository;
 import org.synanton.equalix.adapter.out.database.ClientSequenceStateJpaRepository;
+import org.synanton.equalix.adapter.out.database.ClientVirtualTimeJpaRepository;
+import org.synanton.equalix.adapter.out.database.SchedulerVirtualClockJpaRepository;
 import org.synanton.equalix.adapter.out.database.TaskJpaRepository;
 import org.synanton.equalix.domain.port.out.RemoteExecutorPort;
 
@@ -34,11 +36,19 @@ public abstract class BaseIntegrationTest {
     @Autowired
     protected ClientSequenceStateJpaRepository sequenceStateJpaRepository;
 
+    @Autowired
+    protected ClientVirtualTimeJpaRepository clientVirtualTimeJpaRepository;
+
+    @Autowired
+    protected SchedulerVirtualClockJpaRepository schedulerVirtualClockJpaRepository;
+
     @BeforeEach
     void cleanUp() {
-        clientCountsJpaRepository.deleteAll();
-        sequenceStateJpaRepository.deleteAll();
-        taskJpaRepository.deleteAll();
+        clientCountsJpaRepository.deleteAllInBatch();
+        sequenceStateJpaRepository.deleteAllInBatch();
+        clientVirtualTimeJpaRepository.deleteAllInBatch();
+        schedulerVirtualClockJpaRepository.deleteAllInBatch();
+        taskJpaRepository.deleteAllInBatch();
     }
 
     @TestConfiguration

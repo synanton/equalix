@@ -71,8 +71,8 @@ tenants.
 - **Ingestion** - Kafka (or REST) adapters accept messages and persist them as `RECEIVED` with
   the fairness key, weight, and payload.
 - **Priority calculation** - a scheduled job reads batches of `RECEIVED` tasks, asks the CMS for
-  each fairness key's in-flight count, computes
-  `priority = now + (inFlightCount × penaltyFactor / weight)`, and transitions tasks to `QUEUED`.
+  each fairness key's in-flight count, reserves a persistent weighted virtual finish tag, computes
+  `priority = finishTag + (inFlightCount × penaltyFactor / weight)`, and transitions tasks to `QUEUED`.
 - **Dispatch** - a scheduled dispatcher selects `QUEUED` tasks ordered by priority, applies an
   optional hard quota per fairness key, and moves selected tasks to `DISPATCHED` while
   incrementing CMS and `client_counts`.
@@ -158,7 +158,8 @@ Table `tasks`:
 | `fairness_key`         | VARCHAR(255)   | Identifies the logical group                                  |
 | `weight`               | DECIMAL(10,4)  | Default 1.0                                                   |
 | `status`               | ENUM           | RECEIVED → QUEUED → DISPATCHED → COMMITTED → SUCCEEDED/FAILED/TIMEOUT |
-| `priority`             | BIGINT NULL    | Virtual time; null until QUEUED                               |
+| `priority`             | BIGINT NULL    | Virtual finish tag + in-flight pressure; null until QUEUED    |
+| `virtual_finish`       | DOUBLE NULL    | Weighted virtual finish tag (see §5.5); null until QUEUED     |
 | `payload`              | BYTEA          | Opaque binary                                                 |
 | `created_at`           | TIMESTAMPTZ    |                                                               |
 | `updated_at`           | TIMESTAMPTZ    |                                                               |
@@ -202,10 +203,18 @@ Scheduled every `app.queue.priority-calc-interval` (default 100ms) under `@Sched
 batch of `RECEIVED` tasks:
 
 ```
+V             = scheduler_virtual_clock.virtual_time             -- read once per batch
+finishTag     = max(client_virtual_time.virtual_finish, V) + quantum / weight   -- atomic upsert
 inFlight      = cms.estimateCount(fairnessKey)
 penaltyFactor = adaptiveRpsController.getPenaltyFactor()
-priority      = clock.instant().toEpochMilli() + (inFlight × penaltyFactor / weight)
+priority      = round(finishTag) + (inFlight × penaltyFactor / weight)
 ```
+
+This is self-clocked fair queueing over persistent state. `client_virtual_time` holds, per key,
+`virtual_time` (T_k, service received, advanced on dispatch) and `virtual_finish` (tag of the last
+queued task). `scheduler_virtual_clock` holds the system virtual time V, the highest dispatched
+tag. Starting new work at `max(virtual_finish, V)` stops an idle key from banking credit. All
+updates are monotonic `GREATEST(...)` upserts, so concurrent instances and restarts are safe.
 
 Sequential tasks receive an additional sequence-based boost and a large penalty if the fairness
 key is currently blocked (see §14). Each task is persisted with `status=QUEUED` and the new
@@ -229,13 +238,15 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
       AND (:maxPerClient IS NULL
            OR cc.in_flight_count < :maxPerClient
            OR cc.in_flight_count IS NULL)
-    ORDER BY t.priority ASC NULLS LAST
+    ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
     LIMIT :freeSlots
     FOR UPDATE OF t SKIP LOCKED
     ```
 
 4. For each selected task: set `status=DISPATCHED`, increment CMS (+1), increment `client_counts`,
    call `RemoteExecutorPort.send()`.
+5. Advance `T_k` of each dispatched key and the system virtual time `V` to the highest dispatched
+   finish tag (the sequential dispatcher does the same).
 
 Sequential tasks are dispatched by a separate `SequentialDispatcherService` (see §14).
 

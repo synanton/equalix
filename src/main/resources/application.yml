@@ -43,6 +43,10 @@ app:
     max-queued-time-ms: 60000
     task-timeout-ms: 300000
     max-payload-bytes: 1048576
+    virtual-time:
+      # Virtual-time units charged per task at weight 1.0 (a task advances its key by quantum / weight).
+      # Comparable to the in-flight pressure term, which adds 1000 / currentRps per in-flight task.
+      quantum: 1000
     cms:
       mode: local
       width: 65536

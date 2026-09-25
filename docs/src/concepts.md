@@ -10,11 +10,21 @@ A positive decimal (default `1.0`). The priority formula **divides** the in-flig
 
 ## Virtual time (priority)
 
+Each fairness key has a persistent **virtual time** `T_k` stored in `client_virtual_time`. It records how much weighted service the key has already received and survives restarts and scheduling cycles.
+
+When a task is queued it gets a **finish tag**:
+
 ```text
-priority = now_ms + (cms.estimateCount(key) × penaltyFactor / weight)
+finish_tag = max(virtual_finish(key), V) + quantum / weight
+priority   = round(finish_tag) + (cms.estimateCount(key) × penaltyFactor / weight)
 ```
 
-`penaltyFactor` is `1000 / currentRps` from the adaptive RPS controller. When the executor slows down, the penalty grows and busy keys yield more.
+- `virtual_finish(key)` is the tag of the key's previous queued task, so a key's tasks are spaced `quantum / weight` apart. A backlogged key with weight `w` receives about `w / Σw` of dispatches.
+- `V` is the system virtual time (`scheduler_virtual_clock`), the highest tag dispatched so far. A key that was idle restarts at `V`, so idle periods do not bank credit for a later burst.
+- On dispatch, `T_k` and `V` advance to the task's tag (`T_k ← T_k + quantum / w` for a backlogged key).
+- `quantum` is `app.queue.virtual-time.quantum` (default `1000`).
+
+`penaltyFactor` is `1000 / currentRps` from the adaptive RPS controller. When the executor slows down, the penalty grows and busy keys yield more. Ties are broken by `created_at`, then `id`.
 
 ## In-flight
 
