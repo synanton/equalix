@@ -2,7 +2,11 @@ package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +34,7 @@ public class DispatcherService {
     private final AdaptiveRpsController adaptiveRpsController;
     private final AdaptiveRpsProperties adaptiveRpsProperties;
     private final VirtualTimeService virtualTimeService;
+    private final AgingService agingService;
     private final Clock clock;
 
     @Transactional
@@ -52,13 +57,15 @@ public class DispatcherService {
             ? queueProperties.getMaxPerClientQuota()
             : null;
 
-        List<Task> tasks = taskRepository.findAndLockDispatchable(freeSlots, maxPerClient);
+        Instant now = Instant.now(clock);
+        List<Task> tasks = agingService.isEnabled()
+            ? selectWithAging(freeSlots, maxPerClient, now)
+            : taskRepository.findAndLockDispatchable(freeSlots, maxPerClient);
 
         if (tasks.isEmpty()) {
             return;
         }
 
-        Instant now = Instant.now(clock);
         for (Task task : tasks) {
             task.setStatus(TaskStatus.DISPATCHED).setUpdatedAt(now);
             taskRepository.save(task);
@@ -66,9 +73,24 @@ public class DispatcherService {
             clientCounts.incrementInFlight(task.getFairnessKey());
             remoteExecutor.send(task.getId(), task.getPayload(), null);
         }
-        virtualTimeService.recordDispatch(tasks);
+        virtualTimeService.recordDispatch(tasks, task -> agingService.credit(task, now));
 
         log.debug("Dispatched {} tasks; global in-flight was {}", tasks.size(), globalInFlight);
+    }
+
+    /**
+     * Locks a bounded candidate pool (best base priority plus oldest arrivals) and keeps the best
+     * {@code freeSlots} by aged priority. Tasks that are neither near the front nor among the oldest are not
+     * considered this tick; their aging credit is smaller than that of every older candidate.
+     */
+    private List<Task> selectWithAging(int freeSlots, @Nullable Integer maxPerClient, Instant now) {
+        int poolSize = agingService.candidatePoolSize(freeSlots);
+        Map<UUID, Task> candidates = new LinkedHashMap<>();
+        taskRepository.findAndLockDispatchable(poolSize, maxPerClient)
+            .forEach(task -> candidates.put(task.getId(), task));
+        taskRepository.findAndLockOldestDispatchable(poolSize, maxPerClient)
+            .forEach(task -> candidates.putIfAbsent(task.getId(), task));
+        return agingService.rank(candidates.values(), freeSlots, now);
     }
 
     private void promoteStarvedTasks() {

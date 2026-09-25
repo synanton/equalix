@@ -44,6 +44,17 @@ app:
       # Virtual-time units charged per task at weight 1.0 (a task advances its key by quantum / weight).
       # Comparable to the in-flight pressure term, which adds 1000 / currentRps per in-flight task.
       quantum: 1000
+    aging:
+      # Anti-starvation aging A(W), subtracted from priority at dispatch time (W = seconds since creation).
+      # none | linear (lambda*W) | log (lambda*ln(1+W)) | power (lambda*W^gamma).
+      # max-queued-time-ms promotion stays active as a hard backstop for every policy.
+      policy: none
+      # Aging rate in priority units; one weight-1 task is worth virtual-time.quantum units.
+      lambda: 1000
+      # Exponent for the power policy; > 1 spares short waits and promotes long waits aggressively.
+      gamma: 2.0
+      # Rows locked from each candidate ordering (best priority, oldest) before re-ranking by aged priority.
+      candidate-pool-size: 200
     cms:
       mode: local
       width: 1024

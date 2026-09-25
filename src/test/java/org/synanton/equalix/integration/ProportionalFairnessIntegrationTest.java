@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -32,7 +33,8 @@ import org.synanton.equalix.fairness.FairnessStatistics;
  * each tenant always has {@value #BACKLOG_PER_TENANT} tasks waiting.
  *
  * <p>Conditions follow §5: quotas are off, adaptive RPS is off, and anti-starvation promotion is pushed out of
- * reach (the fixed test clock is behind database time, so every task would otherwise look starved).
+ * reach (the application clock is frozen during tests while database time advances, so tasks would otherwise
+ * look starved once the shared test context is older than {@code max-queued-time-ms}).
  */
 @Slf4j
 @TestPropertySource(properties = {
@@ -49,6 +51,7 @@ class ProportionalFairnessIntegrationTest extends BaseIntegrationTest {
      * many tasks in any window, i.e. {@code ε_max(W) <= MAX_DISPLACED_TASKS / |W|}.
      */
     private static final double MAX_DISPLACED_TASKS = 2.0;
+    private static final double FLOATING_POINT_TOLERANCE = 1e-9;
     private static final int[] MEASURED_WINDOWS = {10, 25, 100, 1_000, 10_000};
     private static final int BACKLOG_PER_TENANT = 2 * DISPATCH_BATCH_SIZE;
     private static final int DISPATCH_WINDOW = 10_000;
@@ -138,6 +141,8 @@ class ProportionalFairnessIntegrationTest extends BaseIntegrationTest {
     }
 
     private void ingest(String tenant, BigDecimal weight) {
+        // Distinct arrival times keep the (priority, arrival, id) tie-break deterministic.
+        clock.advance(Duration.ofMillis(1));
         Task task = taskIngestion.createTask(tenant, weight, PAYLOAD, false, null, null, false);
         tenantByTaskId.put(task.getId(), tenant);
     }
@@ -157,7 +162,7 @@ class ProportionalFairnessIntegrationTest extends BaseIntegrationTest {
 
     private static void assertWithinEmpiricalBound(FairnessStatistics statistics, List<String> dispatches) {
         for (int window : MEASURED_WINDOWS) {
-            double bound = MAX_DISPLACED_TASKS / window;
+            double bound = MAX_DISPLACED_TASKS / window + FLOATING_POINT_TOLERANCE;
             assertThat(statistics.prefixMaxError(dispatches, window))
                 .as("prefix eps_max over W=%d", window)
                 .isLessThanOrEqualTo(bound);

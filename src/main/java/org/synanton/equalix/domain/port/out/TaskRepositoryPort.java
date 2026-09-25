@@ -26,6 +26,12 @@ public interface TaskRepositoryPort {
      */
     List<Task> findAndLockDispatchable(int limit, @Nullable Integer maxPerClient);
 
+    /**
+     * Same eligibility and locking as {@link #findAndLockDispatchable}, but returns the oldest tasks first.
+     * Used to build the aging candidate pool.
+     */
+    List<Task> findAndLockOldestDispatchable(int limit, @Nullable Integer maxPerClient);
+
     /** Finds tasks that have been in QUEUED status longer than the given threshold. */
     List<Task> findStarvedTasks(long olderThanMs, int limit);
 

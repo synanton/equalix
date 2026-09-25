@@ -1,11 +1,14 @@
 package org.synanton.equalix.config.properties;
 
+import jakarta.validation.Valid;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
+import org.springframework.validation.annotation.Validated;
 
 /** Root configuration for queue scheduling behaviour. */
 @Data
+@Validated
 @ConfigurationProperties(prefix = "app.queue")
 public class QueueProperties {
 
@@ -23,4 +26,8 @@ public class QueueProperties {
 
     @NestedConfigurationProperty
     private VirtualTimeProperties virtualTime = new VirtualTimeProperties();
+
+    @Valid
+    @NestedConfigurationProperty
+    private AgingProperties aging = new AgingProperties();
 }

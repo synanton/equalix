@@ -43,6 +43,12 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
     }
 
     @Override
+    public List<Task> findAndLockOldestDispatchable(int limit, @Nullable Integer maxPerClient) {
+        return jpaRepository.findAndLockOldestDispatchable(limit, maxPerClient)
+            .stream().map(this::toDomain).toList();
+    }
+
+    @Override
     public List<Task> findStarvedTasks(long olderThanMs, int limit) {
         return jpaRepository.findStarvedTasks(olderThanMs, limit)
             .stream().map(this::toDomain).toList();

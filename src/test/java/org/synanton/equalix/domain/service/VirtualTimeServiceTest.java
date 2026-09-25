@@ -12,7 +12,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -85,6 +84,19 @@ class VirtualTimeServiceTest {
     }
 
     @Test
+    void shouldChargeKeyFullTagButAdvanceSystemTimeOnlyToAgedPosition() {
+        Task promoted = task("lowWeight", "1.0").setVirtualFinish(50_000.0);
+        Task regular = task("clientB", "1.0").setVirtualFinish(2_000.0);
+
+        service.recordDispatch(List.of(promoted, regular), task -> task == promoted ? 47_500.0 : 0.0);
+
+        verify(virtualTimeRepository).advanceClientVirtualTime("lowWeight", 50_000.0);
+        verify(virtualTimeRepository).advanceClientVirtualTime("clientB", 2_000.0);
+        verify(virtualTimeRepository).advanceSystemVirtualTime(2_500.0);
+        verifyNoMoreInteractions(virtualTimeRepository);
+    }
+
+    @Test
     void shouldIgnoreDispatchedTasksWithoutFinishTag() {
         service.recordDispatch(List.of(task("legacy", "1.0")));
 
@@ -97,7 +109,7 @@ class VirtualTimeServiceTest {
         weights.put("tenantA", "1");
         weights.put("tenantB", "2");
         weights.put("tenantC", "7");
-        SchedulerSimulation simulation = new SchedulerSimulation(new InMemoryVirtualTimeRepository());
+        SchedulerSimulation simulation = new SchedulerSimulation(new InMemoryVirtualTimeRepository(FIXED_NOW));
 
         Map<String, Integer> dispatches = simulation.runBacklogged(weights, 10_000);
 
@@ -108,7 +120,7 @@ class VirtualTimeServiceTest {
 
     @Test
     void shouldNotLetIdleKeyBankCreditForALaterBurst() {
-        SchedulerSimulation simulation = new SchedulerSimulation(new InMemoryVirtualTimeRepository());
+        SchedulerSimulation simulation = new SchedulerSimulation(new InMemoryVirtualTimeRepository(FIXED_NOW));
         simulation.runBacklogged(Map.of("busy", "1"), 1_000);
 
         Map<String, String> weights = new LinkedHashMap<>();
@@ -122,7 +134,7 @@ class VirtualTimeServiceTest {
 
     @Test
     void shouldResumeFromPersistedStateAfterRestart() {
-        InMemoryVirtualTimeRepository repository = new InMemoryVirtualTimeRepository();
+        InMemoryVirtualTimeRepository repository = new InMemoryVirtualTimeRepository(FIXED_NOW);
         VirtualTimeService beforeRestart = new VirtualTimeService(repository, queueProps());
         Task first = task("clientA", "1.0");
         beforeRestart.assignFinishTag(first, beforeRestart.currentSystemVirtualTime());
@@ -211,45 +223,5 @@ class VirtualTimeServiceTest {
     }
 
     private record QueuedTask(Task task, double finishTag, long arrival) {
-    }
-
-    /** In-memory port implementation with the same semantics as the PostgreSQL adapter. */
-    private static final class InMemoryVirtualTimeRepository implements VirtualTimeRepositoryPort {
-
-        private final Map<String, VirtualTimeState> states = new HashMap<>();
-        private double systemVirtualTime;
-
-        @Override
-        public double findSystemVirtualTime() {
-            return systemVirtualTime;
-        }
-
-        @Override
-        public double reserveFinishTag(String fairnessKey, double systemVirtualTimeFloor, double increment) {
-            VirtualTimeState state = states.computeIfAbsent(fairnessKey, key -> new VirtualTimeState()
-                .setFairnessKey(key)
-                .setVirtualTime(systemVirtualTimeFloor)
-                .setVirtualFinish(systemVirtualTimeFloor)
-                .setUpdatedAt(FIXED_NOW));
-            state.setVirtualFinish(Math.max(state.getVirtualFinish(), systemVirtualTimeFloor) + increment);
-            return state.getVirtualFinish();
-        }
-
-        @Override
-        public void advanceClientVirtualTime(String fairnessKey, double finishTag) {
-            VirtualTimeState state = states.get(fairnessKey);
-            state.setVirtualTime(Math.max(state.getVirtualTime(), finishTag))
-                .setVirtualFinish(Math.max(state.getVirtualFinish(), finishTag));
-        }
-
-        @Override
-        public void advanceSystemVirtualTime(double finishTag) {
-            systemVirtualTime = Math.max(systemVirtualTime, finishTag);
-        }
-
-        @Override
-        public Optional<VirtualTimeState> findByFairnessKey(String fairnessKey) {
-            return Optional.ofNullable(states.get(fairnessKey));
-        }
     }
 }

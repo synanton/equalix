@@ -243,10 +243,16 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
     FOR UPDATE OF t SKIP LOCKED
     ```
 
+   When aging is enabled (`app.queue.aging.policy` ≠ `none`), the dispatcher locks a candidate
+   pool instead: the query above with `LIMIT max(freeSlots, candidatePoolSize)`, plus the same query
+   ordered by `created_at, id`. It then keeps the best `freeSlots` by `priority − A(now − created_at)`,
+   tie-broken by `(created_at, id)`. Non-linear aging changes the relative order over time, so it
+   cannot be stored in `priority`.
 4. For each selected task: set `status=DISPATCHED`, increment CMS (+1), increment `client_counts`,
    call `RemoteExecutorPort.send()`.
-5. Advance `T_k` of each dispatched key and the system virtual time `V` to the highest dispatched
-   finish tag (the sequential dispatcher does the same).
+5. Advance `T_k` of each dispatched key to its highest dispatched finish tag. Advance the system
+   virtual time `V` to the highest aged position `tag − A(W)`, so a task promoted by aging does not
+   drag `V` ahead of the backlog. The sequential dispatcher does the same without aging.
 
 Sequential tasks are dispatched by a separate `SequentialDispatcherService` (see §14).
 
