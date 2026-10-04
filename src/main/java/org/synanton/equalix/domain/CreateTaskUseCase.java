@@ -13,6 +13,7 @@ import org.synanton.equalix.domain.model.TaskStatus;
 import org.synanton.equalix.domain.port.in.TaskIngestionPort;
 import org.synanton.equalix.domain.port.out.ClientSequenceStateRepositoryPort;
 import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
+import org.synanton.equalix.domain.service.FairnessHierarchy;
 
 @Component
 @RequiredArgsConstructor
@@ -21,6 +22,7 @@ public class CreateTaskUseCase implements TaskIngestionPort {
     private final TaskRepositoryPort taskRepository;
     private final ClientSequenceStateRepositoryPort sequenceStateRepository;
     private final QueueProperties queueProperties;
+    private final FairnessHierarchy fairnessHierarchy;
     private final Clock clock;
 
     @Override
@@ -35,6 +37,10 @@ public class CreateTaskUseCase implements TaskIngestionPort {
     ) {
         if (fairnessKey == null || fairnessKey.isBlank()) {
             throw new IllegalArgumentException("fairnessKey must not be blank");
+        }
+        String hierarchyError = fairnessHierarchy.validationError(fairnessKey);
+        if (hierarchyError != null) {
+            throw new IllegalArgumentException(hierarchyError);
         }
         if (weight == null || weight.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("weight must be positive");

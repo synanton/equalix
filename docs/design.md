@@ -71,8 +71,8 @@ tenants.
 - **Ingestion** - Kafka (or REST) adapters accept messages and persist them as `RECEIVED` with
   the fairness key, weight, and payload.
 - **Priority calculation** - a scheduled job reads batches of `RECEIVED` tasks, asks the CMS for
-  each fairness key's in-flight count, computes
-  `priority = now + (inFlightCount × penaltyFactor / weight)`, and transitions tasks to `QUEUED`.
+  each fairness key's in-flight count, reserves a persistent weighted virtual finish tag, computes
+  `priority = finishTag + (inFlightCount × penaltyFactor / weight)`, and transitions tasks to `QUEUED`.
 - **Dispatch** - a scheduled dispatcher selects `QUEUED` tasks ordered by priority, applies an
   optional hard quota per fairness key, and moves selected tasks to `DISPATCHED` while
   incrementing CMS and `client_counts`.
@@ -158,7 +158,8 @@ Table `tasks`:
 | `fairness_key`         | VARCHAR(255)   | Identifies the logical group                                  |
 | `weight`               | DECIMAL(10,4)  | Default 1.0                                                   |
 | `status`               | ENUM           | RECEIVED → QUEUED → DISPATCHED → COMMITTED → SUCCEEDED/FAILED/TIMEOUT |
-| `priority`             | BIGINT NULL    | Virtual time; null until QUEUED                               |
+| `priority`             | BIGINT NULL    | Virtual finish tag + in-flight pressure; null until QUEUED    |
+| `virtual_finish`       | DOUBLE NULL    | Weighted virtual finish tag (see §5.5); null until QUEUED     |
 | `payload`              | BYTEA          | Opaque binary                                                 |
 | `created_at`           | TIMESTAMPTZ    |                                                               |
 | `updated_at`           | TIMESTAMPTZ    |                                                               |
@@ -193,8 +194,14 @@ Two adapters implement `CMSProviderPort`:
   `app.queue.cms.mode=redis`. Recommended when running 3+ instances with strict cross-instance
   fairness requirements. See §7.7.
 
-On startup, the local adapter warms up from `client_counts`. The Redis adapter needs no warm-up
-because Redis retains state across restarts.
+Both adapters are wrapped in `TransactionAwareCmsProvider`. Inside a transaction, `add` only
+buffers the delta; the net deltas are applied after commit and discarded on rollback. A rolled-back
+dispatch or completion therefore leaves the sketch unchanged.
+
+Both adapters map a key to its cells with `CmsKeyHasher`: a 64-bit hash of the key's UTF-8 bytes,
+mixed per row. When the application is ready, `CmsWarmUpListener` rebuilds the sketch from
+in-flight tasks, so a restarted instance does not start empty. A shared Redis sketch is rebuilt the
+same way, as by a watchdog run.
 
 ### 5.5 Priority calculator
 
@@ -202,10 +209,18 @@ Scheduled every `app.queue.priority-calc-interval` (default 100ms) under `@Sched
 batch of `RECEIVED` tasks:
 
 ```
+V             = scheduler_virtual_clock.virtual_time             -- read once per batch
+finishTag     = max(client_virtual_time.virtual_finish, V) + quantum / weight   -- atomic upsert
 inFlight      = cms.estimateCount(fairnessKey)
 penaltyFactor = adaptiveRpsController.getPenaltyFactor()
-priority      = clock.instant().toEpochMilli() + (inFlight × penaltyFactor / weight)
+priority      = round(finishTag) + (inFlight × penaltyFactor / weight)
 ```
+
+This is self-clocked fair queueing over persistent state. `client_virtual_time` holds, per key,
+`virtual_time` (T_k, service received, advanced on dispatch) and `virtual_finish` (tag of the last
+queued task). `scheduler_virtual_clock` holds the system virtual time V, the highest dispatched
+tag. Starting new work at `max(virtual_finish, V)` stops an idle key from banking credit. All
+updates are monotonic `GREATEST(...)` upserts, so concurrent instances and restarts are safe.
 
 Sequential tasks receive an additional sequence-based boost and a large penalty if the fairness
 key is currently blocked (see §14). Each task is persisted with `status=QUEUED` and the new
@@ -229,13 +244,21 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
       AND (:maxPerClient IS NULL
            OR cc.in_flight_count < :maxPerClient
            OR cc.in_flight_count IS NULL)
-    ORDER BY t.priority ASC NULLS LAST
+    ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
     LIMIT :freeSlots
     FOR UPDATE OF t SKIP LOCKED
     ```
 
+   When aging is enabled (`app.queue.aging.policy` ≠ `none`), the dispatcher locks a candidate
+   pool instead: the query above with `LIMIT max(freeSlots, candidatePoolSize)`, plus the same query
+   ordered by `created_at, id`. It then keeps the best `freeSlots` by `priority − A(now − created_at)`,
+   tie-broken by `(created_at, id)`. Non-linear aging changes the relative order over time, so it
+   cannot be stored in `priority`.
 4. For each selected task: set `status=DISPATCHED`, increment CMS (+1), increment `client_counts`,
    call `RemoteExecutorPort.send()`.
+5. Advance `T_k` of each dispatched key to its highest dispatched finish tag. Advance the system
+   virtual time `V` to the highest aged position `tag − A(W)`, so a task promoted by aging does not
+   drag `V` ahead of the backlog. The sequential dispatcher does the same without aging.
 
 Sequential tasks are dispatched by a separate `SequentialDispatcherService` (see §14).
 
@@ -369,14 +392,16 @@ Practical sizing:
 
 ### 7.5 Operations
 
-- `add(key, delta)` - for each row `i`, compute `h_i(key)` and add `delta` to that cell.
+- `add(key, delta)` - for each row `i`, compute `h_i(key)` and add `delta` to that cell. `h_i`
+  mixes a 64-bit hash of the key's UTF-8 bytes with a per-row constant, so any `depth` is supported.
 - `estimateCount(key)` - return `max(0, min over the d cells for that key)`. The `max(0, …)`
   guard prevents negative values when decrement collisions occur.
 
 ### 7.6 Integration with `client_counts`
 
 - `client_counts` is the durable source of truth for hard quota enforcement and Watchdog repair.
-- CMS is updated in memory on every dispatch (+1) and completion (−1) - the fast path.
+- CMS is updated on every dispatch (+1) and completion (−1) - the fast path - once the
+  transaction that changed the task status has committed.
 - `client_counts` is updated in the same transaction as the status change.
 - If the two diverge (crash, missed event), the Watchdog reconciles both.
 
@@ -387,7 +412,10 @@ completions. Two instances can each dispatch believing the fairness key is light
 resulting in temporary over-dispatch until the next Watchdog cycle. The Redis adapter replaces
 the per-instance sketch with a single shared matrix.
 
-**Layout** - one Redis hash `{namespace}:cms` with fields `r{row}:c{col}`. `add` uses a Lua
+**Layout** - one Redis hash `{key-namespace}:v{layout}` (default `equalix:cms:v2`) with fields
+`r{row}:c{col}`, plus a `{key-namespace}:v{layout}:total` counter. The layout version is part of the
+key, so instances that hash keys differently never write into the same hash during a rolling
+deploy. `add` uses a Lua
 script for atomic multi-cell increment; `estimateCount` uses `HMGET` for all `d` cells.
 Batch reads in the priority calculator are pipelined into a single round-trip.
 
@@ -409,12 +437,14 @@ shared Redis hash, restoring accuracy for all instances simultaneously.
 
 ## 8. Adaptive RPS
 
-Sliding window of the last 100 completions. Every completion updates:
+Sliding window of the last 100 completions, and an evaluation at most every `adjustment-interval-ms`
+(default 2 s):
 
-- `avg_latency` - mean of window durations.
+- `latency` - mean duration of the completions since the previous evaluation, smoothed as
+  `smoothed = α·latency + (1−α)·smoothed` (`latency-ema-alpha`, default 0.7).
 - `error_rate` - fraction of failures/timeouts in the window.
 
-Adjustment rules:
+Adjustment rules, applied to the smoothed latency:
 
 | Condition                                                   | Action                              |
 |-------------------------------------------------------------|-------------------------------------|
@@ -422,6 +452,14 @@ Adjustment rules:
 | `avg_latency > target-latency-ms × 1.2`                     | `currentRps × 0.9`                  |
 | `avg_latency < target-latency-ms × 0.8` AND `error_rate < 1 %` | `currentRps × 1.05` up to `max-rps` |
 | Otherwise                                                   | No change                           |
+
+**Dead-band dampener.** Reversing direction (an increase after a decrease, or the opposite) requires
+`direction-change-confirmations` (default 3) consecutive evaluations that agree. An evaluation inside the
+dead band resets the count. The emergency brake is never dampened.
+
+With `adjustment-interval-ms: 0` the controller evaluates the whole window on every completion, as before
+EQX-6. That re-applies one spike's evidence up to `window-size` times and collapses the rate to `min-rps`.
+See invariants §25.7 for the simulation.
 
 `penaltyFactor = 1000 / currentRps`. When the remote system slows, the penalty factor grows and
 heavy fairness keys are pushed further into the future, automatically throttling dispatch
@@ -434,7 +472,7 @@ pressure.
 ### 9.1 Priority formula
 
 ```
-priority = current_time_ms + (inFlightCount × penaltyFactor / weight)
+priority = finishTag + (inFlightCount × penaltyFactor / weight)      -- finishTag: persistent virtual time, §5.5
 ```
 
 A fairness key with many in-flight tasks receives a larger priority offset, pushing its new
@@ -458,6 +496,26 @@ requires locking; locking reduces throughput. Equalix accepts approximate counts
 schedules on virtual time, delivering the same long-term proportional outcome without paying the
 synchronization cost. Over a short sliding window every fairness key receives its weighted share
 of dispatch slots.
+
+### 9.5 Hierarchical scheduling (EQX-7)
+
+With `app.queue.fairness-mode: hierarchical`, `DispatcherService` delegates selection to
+`HierarchicalDispatchPlanner`:
+
+1. `findQueuedLeaves()` groups QUEUED non-sequential tasks by fairness key: count, promoted count, max
+   weight and in-flight count. It uses the partial index `idx_tasks_queued_by_key` from `V5`.
+2. It loads `hierarchy_node` rows (virtual runtime and children floor) for every node on those paths.
+3. `HierarchicalSelector` (pure) plans `freeSlots` picks. It descends from the root, at each node taking
+   the backlogged child with the least `τ + q/w + p·F̂/w`, then charges `q/w` along the path.
+4. `findAndLockQueuedHeads()` locks the planned number of tasks per key, best priority first, `FOR UPDATE
+   SKIP LOCKED`, in a single `LATERAL` query.
+5. After dispatch, each node is charged `τ = max(τ, floor) + Σ q/w`, and each parent's children floor is
+   raised. Both are monotonic upserts in the same transaction.
+
+The sequential dispatcher charges its tasks through the same path. In hierarchical mode, the CMS is wrapped in
+`HierarchicalCmsProvider`, which also counts every internal node (`acme/`) and the root (`""`). That provides
+the per-layer pressure, and the total in flight comes from the root. See invariants §27 for the model and
+measurements.
 
 ---
 
@@ -534,11 +592,16 @@ Metrics exposed at `/actuator/prometheus` via Micrometer:
 | `equalix.task.duration`        | Timer   | `success`                           | `MicrometerPerformanceMonitorAdapter`   |
 | `equalix.task.errors`          | Counter |                                     | `MicrometerPerformanceMonitorAdapter`   |
 | `equalix.adaptive.rps`         | Gauge   |                                     | `MicrometerPerformanceMonitorAdapter`   |
+| `equalix.cms.estimation.error`, `…error.magnitude` | Summary | `direction` | CMS error sampling (EQX-2, opt-in) |
+| `equalix.cms.estimation.drift` | Gauge   | `fairnessKey`, `layer`              | Watchdog, before each rebuild (EQX-5)   |
+| `equalix.cms.estimation.drift.{max,min,absolute,keys,keys.sampled,timestamp}` | Gauge | | Watchdog (EQX-5) |
+| `equalix.cms.estimation.drift.layer.absolute` | Gauge | `layer`                 | Watchdog (EQX-7)                        |
+| `equalix.hierarchy.dispatches` | Counter | `layer`, `node`                     | Hierarchical dispatcher (EQX-7)         |
 | `jvm.*`, `process.*`, `system.*`    | various | Micrometer defaults                 | Spring Boot Actuator                    |
 | `http.server.requests`              | Timer   | `uri`, `method`, `status`           | Spring Boot Actuator                    |
 
-Additional metrics (dispatcher throughput, CMS estimates per key, Watchdog drift count,
-sequential blocked count) are candidates for follow-up work.
+Additional metrics (dispatcher throughput, sequential blocked count) are candidates for follow-up
+work.
 
 REST APIs require `X-API-Key`. `/actuator/health` and `/actuator/info` are public;
 `/actuator/prometheus` requires the API key.
@@ -706,7 +769,8 @@ against a rate-limited downstream executor is the primary problem.
 
 ## 19. Future enhancements
 
-- Per-key CMS estimate gauges and Watchdog drift counters.
+- Per-tenant latency attribution for adaptive RPS. Today one global controller sets capacity, and
+  per-layer in-flight pressure pushes back the tenants that hold it (§9.5).
 - gRPC ingestion adapter alongside REST and Kafka.
 - Dead-letter management UI for inspecting and replaying `FAILED` tasks.
 - Distributed CMS is designed (§7.7) but its production hardening (health probes, connection

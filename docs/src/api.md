@@ -26,7 +26,7 @@ Base path: `/api/v1`. JSON unless noted. Every route under `/api/v1` requires he
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `fairnessKey` | yes | Non-blank |
+| `fairnessKey` | yes | Non-blank. In hierarchical mode a path such as `acme/sales`, without empty segments |
 | `weight` | no | Positive; default `1.0` |
 | `payload` | yes | Base64; max `app.queue.max-payload-bytes` (1 MiB default) |
 | `sequential` | no | Default `false` |

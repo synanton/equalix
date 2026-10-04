@@ -21,6 +21,9 @@ public class Task {
     private TaskStatus status;
     @Nullable
     private Long priority;
+    /** Weighted virtual finish tag assigned when the task is queued; null for tasks queued before EQX-3. */
+    @Nullable
+    private Double virtualFinish;
     private byte[] payload;
     private Instant createdAt;
     private Instant updatedAt;
@@ -31,6 +34,8 @@ public class Task {
     private String lastError;
     @Nullable
     private byte[] result;
+    /** Optimistic-lock version; must round-trip through the domain model so repeated saves do not conflict. */
+    private long version;
 
     // Sequential execution fields
     @Nullable
@@ -41,4 +46,9 @@ public class Task {
     @Nullable
     private byte[] previousResult;
     private boolean requiresPreviousResult;
+
+    /** Returns the scheduling weight, treating a missing or non-positive weight as 1.0. */
+    public double effectiveWeight() {
+        return weight == null || weight.signum() <= 0 ? 1.0 : weight.doubleValue();
+    }
 }

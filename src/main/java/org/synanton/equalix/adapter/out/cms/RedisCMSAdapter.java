@@ -15,8 +15,11 @@ import org.synanton.equalix.domain.port.out.CMSProviderPort;
  * CMSProviderPort backed by a shared Redis hash matrix.
  * All instances read and write the same sketch, providing a consistent global in-flight view.
  *
- * Storage layout: one Redis hash at {@code keyNamespace}, fields named {@code r{row}:c{col}}.
- * A separate key {@code keyNamespace:total} tracks the net sum of all add() deltas.
+ * Storage layout: one Redis hash at {@code keyNamespace:v{layout}}, fields named {@code r{row}:c{col}}.
+ * A separate key {@code keyNamespace:v{layout}:total} tracks the net sum of all add() deltas. The layout version
+ * ({@link CmsKeyHasher#LAYOUT_VERSION}) is part of the key, so instances with different cell layouts never write
+ * into each other's sketch during a rolling deploy. The previous layout lived at {@code keyNamespace} itself and
+ * can be deleted once every instance runs this version.
  *
  * add() uses a Lua script so all d cell increments and the total counter update are atomic
  * within a single Redis round-trip - no application-side locking required.
@@ -37,18 +40,12 @@ public class RedisCMSAdapter implements CMSProviderPort {
             return 1
             """, Long.class);
 
-    // One seed per supported row to keep hash distributions independent.
-    private static final long[] ROW_SEEDS = {
-        0xDEADBEEFDEADBEEFL, 0xCAFEBABECAFEBABEL,
-        0x0102030405060708L, 0xF0E0D0C0B0A09080L,
-        0x123456789ABCDEF0L, 0xAABBCCDD11223344L,
-        0x5566778899AABBCCL, 0x1A2B3C4D5E6F7A8BL
-    };
 
     private final int width;
     private final int depth;
     private final String hashKey;
     private final String totalKey;
+    private final CmsKeyHasher hasher;
     private final boolean fallbackToLocal;
     private final StringRedisTemplate redisTemplate;
     /** Warm fallback - only non-null when fallbackToLocal=true. */
@@ -58,8 +55,9 @@ public class RedisCMSAdapter implements CMSProviderPort {
         CmsProperties cms = props.getCms();
         this.width = cms.getWidth();
         this.depth = cms.getDepth();
-        this.hashKey = cms.getRedis().getKeyNamespace();
+        this.hashKey = cms.getRedis().getKeyNamespace() + ":v" + CmsKeyHasher.LAYOUT_VERSION;
         this.totalKey = hashKey + ":total";
+        this.hasher = new CmsKeyHasher(width, depth);
         this.fallbackToLocal = cms.getRedis().isFallbackToLocal();
         this.redisTemplate = redisTemplate;
         this.localFallback = fallbackToLocal ? new CountMinSketchAdapter(props) : null;
@@ -72,8 +70,9 @@ public class RedisCMSAdapter implements CMSProviderPort {
         try {
             List<String> argv = new ArrayList<>(1 + depth);
             argv.add(String.valueOf(delta));
+            int[] cells = hasher.cells(key);
             for (int row = 0; row < depth; row++) {
-                argv.add(fieldName(row, hashCell(key, row)));
+                argv.add(fieldName(row, cells[row]));
             }
             redisTemplate.execute(ADD_SCRIPT, List.of(hashKey, totalKey), argv.toArray(new String[0]));
         } catch (Exception e) {
@@ -89,8 +88,9 @@ public class RedisCMSAdapter implements CMSProviderPort {
     public long estimateCount(String key) {
         try {
             List<Object> fields = new ArrayList<>(depth);
+            int[] cells = hasher.cells(key);
             for (int row = 0; row < depth; row++) {
-                fields.add(fieldName(row, hashCell(key, row)));
+                fields.add(fieldName(row, cells[row]));
             }
             List<Object> values = redisTemplate.opsForHash().multiGet(hashKey, fields);
             long min = Long.MAX_VALUE;
@@ -125,9 +125,9 @@ public class RedisCMSAdapter implements CMSProviderPort {
                         org.springframework.data.redis.core.RedisOperations<String, String> strOps =
                             (org.springframework.data.redis.core.RedisOperations<String, String>) ops;
                         snapshot.forEach((fairnessKey, count) -> {
+                            int[] cells = hasher.cells(fairnessKey);
                             for (int row = 0; row < depth; row++) {
-                                strOps.opsForHash().increment(
-                                    hashKey, fieldName(row, hashCell(fairnessKey, row)), count);
+                                strOps.opsForHash().increment(hashKey, fieldName(row, cells[row]), count);
                             }
                         });
                         return null;
@@ -158,19 +158,5 @@ public class RedisCMSAdapter implements CMSProviderPort {
 
     private String fieldName(int row, int col) {
         return "r" + row + ":c" + col;
-    }
-
-    /**
-     * 64-bit mixing hash with a per-row seed keeps row distributions statistically independent.
-     * The mixing constants are from the finalizer of MurmurHash3 / xxHash.
-     */
-    private int hashCell(String key, int row) {
-        long h = key.hashCode() ^ ROW_SEEDS[row % ROW_SEEDS.length];
-        h ^= h >>> 33;
-        h *= 0xff51afd7ed558ccdL;
-        h ^= h >>> 33;
-        h *= 0xc4ceb9fe1a85ec53L;
-        h ^= h >>> 33;
-        return Math.floorMod(h, width);
     }
 }

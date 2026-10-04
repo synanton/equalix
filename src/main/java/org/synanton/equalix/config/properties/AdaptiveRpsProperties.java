@@ -21,4 +21,13 @@ public class AdaptiveRpsProperties {
     private double decreaseFactor;
     private double increaseFactor;
     private double increaseErrorThreshold;
+
+    /** EMA weight of the newest window mean in (0, 1]; 1 disables smoothing. */
+    private double latencyEmaAlpha;
+
+    /** Minimum time between two RPS adjustments; 0 adjusts on every completion (pre-EQX-6 behaviour). */
+    private long adjustmentIntervalMs;
+
+    /** Consecutive agreeing evaluations required to reverse direction; 1 reverses immediately. */
+    private int directionChangeConfirmations;
 }

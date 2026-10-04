@@ -41,6 +41,10 @@ public class TaskEntity {
     @Nullable
     private Long priority;
 
+    @Nullable
+    @Column(name = "virtual_finish")
+    private Double virtualFinish;
+
     @Column(columnDefinition = "BYTEA", nullable = false)
     private byte[] payload;
 
