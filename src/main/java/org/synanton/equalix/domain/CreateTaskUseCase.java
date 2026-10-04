@@ -65,7 +65,6 @@ public class CreateTaskUseCase implements TaskIngestionPort {
             .setStatus(TaskStatus.RECEIVED)
             .setRetryCount(0)
             .setCreatedAt(now)
-            .setUpdatedAt(now)
             .setSequential(isSequential)
             .setSequenceNumber(sequenceNumber)
             .setDependsOnTaskId(dependsOnTaskId)

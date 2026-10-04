@@ -25,8 +25,7 @@ public class ClientSequenceStateRepositoryAdapter implements ClientSequenceState
                     .setFairnessKey(fairnessKey)
                     .setLastCompletedSequence(0L)
                     .setLastDispatchedSequence(0L)
-                    .setBlocked(false)
-                    .setUpdatedAt(clock.instant());
+                    .setBlocked(false);
                 return toDomain(jpaRepository.save(entity));
             });
     }

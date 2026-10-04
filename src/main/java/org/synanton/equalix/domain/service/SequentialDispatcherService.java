@@ -66,12 +66,11 @@ public class SequentialDispatcherService {
         }
 
         Instant now = Instant.now(clock);
-        nextTask.setStatus(TaskStatus.DISPATCHED).setUpdatedAt(now);
+        nextTask.setStatus(TaskStatus.DISPATCHED);
         taskRepository.save(nextTask);
 
         state.setCurrentExecutingTaskId(nextTask.getId())
-            .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L)
-            .setUpdatedAt(now);
+            .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L);
         sequenceStateRepository.save(state);
 
         cms.add(state.getFairnessKey(), 1);

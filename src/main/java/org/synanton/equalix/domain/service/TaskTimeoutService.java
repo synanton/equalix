@@ -51,8 +51,7 @@ public class TaskTimeoutService {
         }
         task.setStatus(TaskStatus.TIMEOUT)
             .setLastError("Exceeded task timeout of " + queueProperties.getTaskTimeoutMs() + "ms")
-            .setCompletedAt(now)
-            .setUpdatedAt(now);
+            .setCompletedAt(now);
         taskRepository.save(task);
         cms.add(task.getFairnessKey(), -1);
         clientCounts.decrementInFlight(task.getFairnessKey());
@@ -61,8 +60,7 @@ public class TaskTimeoutService {
             ClientSequenceState state = sequenceStateRepository.findOrCreate(task.getFairnessKey());
             state.setBlocked(true)
                 .setBlockedAt(now)
-                .setCurrentExecutingTaskId(task.getId())
-                .setUpdatedAt(now);
+                .setCurrentExecutingTaskId(task.getId());
             sequenceStateRepository.save(state);
         }
     }

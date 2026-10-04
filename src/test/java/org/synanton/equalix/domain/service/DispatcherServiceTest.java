@@ -105,7 +105,8 @@ class DispatcherServiceTest {
         service.dispatch();
 
         assertThat(task.getStatus()).isEqualTo(TaskStatus.DISPATCHED);
-        assertThat(task.getUpdatedAt()).isEqualTo(FIXED_NOW);
+        // DB-clock unification: dispatch leaves a pre-existing stamp untouched.
+        assertThat(task.getUpdatedAt()).isEqualTo(FIXED_NOW.minusMillis(100));
         verify(taskRepository).save(task);
         verify(cms).add("tenantX", 1L);
         verify(clientCounts).incrementInFlight("tenantX");
@@ -192,7 +193,7 @@ class DispatcherServiceTest {
             .setPayload(new byte[]{1})
             .setPriority(0L)
             .setCreatedAt(FIXED_NOW)
-            .setUpdatedAt(FIXED_NOW);
+            .setUpdatedAt(FIXED_NOW.minusMillis(100));
     }
 
     private QueueProperties queueProps(int maxInProcess, int maxPerClient) {

@@ -50,8 +50,7 @@ public class SequentialCompletionHandlerService {
         task.setStatus(finalStatus)
             .setResult(result)
             .setLastError(error)
-            .setCompletedAt(now)
-            .setUpdatedAt(now);
+            .setCompletedAt(now);
         taskRepository.save(task);
 
         ClientSequenceState state = sequenceStateRepository.findOrCreate(task.getFairnessKey());
@@ -62,12 +61,10 @@ public class SequentialCompletionHandlerService {
                         : state.getLastCompletedSequence() + 1)
                 .setCurrentExecutingTaskId(null)
                 .setBlocked(false)
-                .setBlockedAt(null)
-                .setUpdatedAt(now);
+                .setBlockedAt(null);
         } else {
             state.setBlocked(true)
-                .setBlockedAt(now)
-                .setUpdatedAt(now);
+                .setBlockedAt(now);
         }
         sequenceStateRepository.save(state);
 
