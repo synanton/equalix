@@ -46,8 +46,7 @@ public class CompletionHandlerService {
         task.setStatus(finalStatus)
             .setResult(result)
             .setLastError(error)
-            .setCompletedAt(now)
-            .setUpdatedAt(now);
+            .setCompletedAt(now);
 
         taskRepository.save(task);
         cms.add(task.getFairnessKey(), -1);

@@ -1,6 +1,8 @@
 package org.synanton.equalix.domain.port.out;
 
-/** Outgoing port for recording task execution metrics used by the AdaptiveRpsController. */
+import org.synanton.equalix.domain.model.CmsDriftReport;
+
+/** Outgoing port for scheduler metrics: task execution (also fed to the AdaptiveRpsController) and CMS accuracy. */
 public interface PerformanceMonitorPort {
 
     /**
@@ -11,4 +13,23 @@ public interface PerformanceMonitorPort {
      * @param success whether the task succeeded
      */
     void recordCompletion(String fairnessKey, long durationMs, boolean success);
+
+    /**
+     * Records one sample of the CMS estimation error {@code e_k = F̂_k - F_k} for a fairness key.
+     *
+     * @param error signed error; positive is an overestimate
+     */
+    void recordCmsEstimationError(long error);
+
+    /**
+     * Publishes the CMS drift measured by the watchdog, replacing the previously published values.
+     * Keys absent from {@link CmsDriftReport#topDrifting()} are treated as having no drift.
+     */
+    void publishCmsDrift(CmsDriftReport report);
+
+    /**
+     * Counts one dispatched task for a hierarchy node (EQX-7), for isolation dashboards: a node's share of its
+     * parent is its counter rate over the sum of its siblings' rates.
+     */
+    void recordHierarchicalDispatch(String layer, String nodeKey);
 }

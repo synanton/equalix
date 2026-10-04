@@ -32,8 +32,9 @@ import org.synanton.equalix.config.properties.QueueProperties;
 @SuppressWarnings("unchecked")
 class RedisCMSAdapterTest {
 
-    private static final String HASH_KEY = "test:cms";
-    private static final String TOTAL_KEY = "test:cms:total";
+    private static final String NAMESPACE = "test:cms";
+    private static final String HASH_KEY = "test:cms:v2";
+    private static final String TOTAL_KEY = "test:cms:v2:total";
 
     @Mock
     StringRedisTemplate redisTemplate;
@@ -52,7 +53,7 @@ class RedisCMSAdapterTest {
         cms.setDepth(3);
         cms.setMode("redis");
         CmsProperties.RedisProperties redis = new CmsProperties.RedisProperties();
-        redis.setKeyNamespace(HASH_KEY);
+        redis.setKeyNamespace(NAMESPACE);
         redis.setFallbackToLocal(false);
         cms.setRedis(redis);
         props.setCms(cms);

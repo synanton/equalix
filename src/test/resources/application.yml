@@ -24,6 +24,8 @@ spring:
       enable-auto-commit: false
 
 app:
+  scheduling:
+    enabled: false
   security:
     api-key: test-api-key
   executor:
@@ -42,10 +44,33 @@ app:
     max-queued-time-ms: 60000
     task-timeout-ms: 300000
     max-payload-bytes: 1048576
+    # flat: every fairness key is an independent tenant. hierarchical: keys are paths (org/department/...)
+    # and every layer is scheduled fairly among its siblings, see app.hierarchical (EQX-7).
+    fairness-mode: flat
+    virtual-time:
+      # Virtual-time units charged per task at weight 1.0 (a task advances its key by quantum / weight).
+      # Comparable to the in-flight pressure term, which adds 1000 / currentRps per in-flight task.
+      quantum: 1000
+    aging:
+      # Anti-starvation aging A(W), subtracted from priority at dispatch time (W = seconds since creation).
+      # none | linear (lambda*W) | log (lambda*ln(1+W)) | power (lambda*W^gamma).
+      # max-queued-time-ms promotion stays active as a hard backstop for every policy.
+      policy: none
+      # Aging rate in priority units; one weight-1 task is worth virtual-time.quantum units.
+      lambda: 1000
+      # Exponent for the power policy; > 1 spares short waits and promotes long waits aggressively.
+      gamma: 2.0
+      # Rows locked from each candidate ordering (best priority, oldest) before re-ranking by aged priority.
+      candidate-pool-size: 200
     cms:
       mode: local
       width: 1024
       depth: 3
+      error-sampling:
+        # Periodically sample e_k = CMS estimate - in-flight tasks and publish equalix.cms.estimation.error*
+        # (EQX-2). Meant for load tests: each sample runs a GROUP BY over in-flight tasks.
+        enabled: false
+        interval-ms: 1000
     sequential:
       enabled: true
       client-block-timeout-ms: 10000
@@ -66,8 +91,27 @@ app:
     decrease-factor: 0.9
     increase-factor: 1.05
     increase-error-threshold: 0.01
+    adjustment-interval-ms: 2000
+    latency-ema-alpha: 0.7
+    direction-change-confirmations: 3
+  hierarchical:
+    # Used when app.queue.fairness-mode is hierarchical.
+    separator: /
+    # Layers from the root down. Segments beyond the last layer fold into it; shorter keys are leaves higher up.
+    layers:
+      - name: organization
+        default-weight: 1.0
+      - name: department
+        default-weight: 1.0
+    # Per-node weight overrides by path, e.g. "[acme]": 2.0 or "[acme/sales]": 3.0. Leaves otherwise use the
+    # task weight; other nodes use their layer's default-weight.
+    weights: {}
+    # Layers (from the root) whose nodes get an equalix.hierarchy.dispatches{layer,node} counter.
+    metrics-depth: 1
   watchdog:
     interval-minutes: 60
+    # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).
+    drift-metric-max-keys: 100
 
 management:
   endpoints:

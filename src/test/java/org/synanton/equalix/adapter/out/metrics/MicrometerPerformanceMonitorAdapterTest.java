@@ -6,16 +6,24 @@ import static org.mockito.Mockito.verify;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.core.instrument.Gauge;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.synanton.equalix.domain.model.CmsDriftReport;
 import org.synanton.equalix.domain.service.AdaptiveRpsController;
 
 @ExtendWith(MockitoExtension.class)
 class MicrometerPerformanceMonitorAdapterTest {
+
+    private static final Instant DRIFT_TIME = Instant.parse("2026-01-01T00:05:00Z");
 
     @Mock
     private AdaptiveRpsController adaptiveRpsController;
@@ -68,5 +76,91 @@ class MicrometerPerformanceMonitorAdapterTest {
     void shouldRegisterCurrentRpsGauge() {
         assertThat(registry.find("equalix.adaptive.rps").gauge()).isNotNull();
         assertThat(registry.find("equalix.adaptive.rps").gauge().value()).isEqualTo(12.0);
+    }
+
+    @Test
+    void shouldPublishCmsErrorByDirectionAndMagnitude() {
+        adapter.recordCmsEstimationError(3L);
+        adapter.recordCmsEstimationError(-2L);
+        adapter.recordCmsEstimationError(0L);
+        adapter.recordCmsEstimationError(1L);
+
+        var over = registry.find("equalix.cms.estimation.error").tag("direction", "over").summary();
+        var under = registry.find("equalix.cms.estimation.error").tag("direction", "under").summary();
+        var exact = registry.find("equalix.cms.estimation.error").tag("direction", "exact").summary();
+        var magnitude = registry.find("equalix.cms.estimation.error.magnitude").summary();
+        assertThat(List.of(over.count(), under.count(), exact.count(), magnitude.count()))
+            .containsExactly(2L, 1L, 1L, 4L);
+        assertThat(List.of(over.totalAmount(), under.max(), magnitude.totalAmount()))
+            .containsExactly(4.0, 2.0, 6.0);
+    }
+
+    @Test
+    void shouldPublishPerKeyDriftAndAggregates() {
+        adapter.publishCmsDrift(new CmsDriftReport(DRIFT_TIME, 40, 2, 3, -1, 4, Map.of("tenantA", 3L, "tenantB", -1L),
+            Map.of("tenantA", "key", "tenantB", "key"), Map.of("key", 4L)));
+
+        assertThat(driftGauges()).isEqualTo(Map.of("tenantA", 3.0, "tenantB", -1.0));
+        assertThat(List.of(gauge("equalix.cms.estimation.drift.max"), gauge("equalix.cms.estimation.drift.min"),
+            gauge("equalix.cms.estimation.drift.absolute"), gauge("equalix.cms.estimation.drift.keys"),
+            gauge("equalix.cms.estimation.drift.keys.sampled"), gauge("equalix.cms.estimation.drift.timestamp")))
+            .containsExactly(3.0, -1.0, 4.0, 2.0, 40.0, (double) DRIFT_TIME.getEpochSecond());
+    }
+
+    @Test
+    void shouldRemoveSeriesOfKeysThatStoppedDriftingAndUpdateTheRest() {
+        adapter.publishCmsDrift(new CmsDriftReport(DRIFT_TIME, 2, 2, 3, -1, 4, Map.of("tenantA", 3L, "tenantB", -1L),
+            Map.of("tenantA", "key", "tenantB", "key"), Map.of("key", 4L)));
+
+        adapter.publishCmsDrift(new CmsDriftReport(DRIFT_TIME.plusSeconds(300), 2, 1, 5, 0, 5,
+            Map.of("tenantA", 5L), Map.of("tenantA", "key"), Map.of("key", 5L)));
+
+        assertThat(driftGauges()).isEqualTo(Map.of("tenantA", 5.0));
+    }
+
+    @Test
+    void shouldExposeZeroAggregatesBeforeFirstWatchdogRun() {
+        assertThat(driftGauges()).isEmpty();
+        assertThat(List.of(gauge("equalix.cms.estimation.drift.keys"), gauge("equalix.cms.estimation.drift.timestamp")))
+            .containsExactly(0.0, 0.0);
+    }
+
+    @Test
+    void shouldTagDriftWithLayerAndPublishPerLayerTotals() {
+        adapter.publishCmsDrift(new CmsDriftReport(DRIFT_TIME, 3, 2, 3, 0, 6, Map.of("acme/", 3L, "acme/sales", 3L),
+            Map.of("acme/", "organization", "acme/sales", "department"),
+            Map.of("organization", 3L, "department", 3L, "root", 0L)));
+
+        assertThat(registry.find("equalix.cms.estimation.drift").tag("layer", "organization").gauge().value())
+            .isEqualTo(3.0);
+        assertThat(registry.get("equalix.cms.estimation.drift.layer.absolute").tag("layer", "department")
+            .gauge().value()).isEqualTo(3.0);
+
+        adapter.publishCmsDrift(new CmsDriftReport(DRIFT_TIME, 3, 0, 0, 0, 0, Map.of(), Map.of(),
+            Map.of("organization", 0L)));
+
+        assertThat(registry.get("equalix.cms.estimation.drift.layer.absolute").tag("layer", "department")
+            .gauge().value()).isZero();
+    }
+
+    @Test
+    void shouldCountHierarchicalDispatchesPerNode() {
+        adapter.recordHierarchicalDispatch("organization", "acme/");
+        adapter.recordHierarchicalDispatch("organization", "acme/");
+        adapter.recordHierarchicalDispatch("organization", "small");
+
+        assertThat(registry.get("equalix.hierarchy.dispatches").tag("node", "acme/").counter().count())
+            .isEqualTo(2.0);
+        assertThat(registry.get("equalix.hierarchy.dispatches").tag("node", "small").counter().count())
+            .isEqualTo(1.0);
+    }
+
+    private Map<String, Double> driftGauges() {
+        return registry.find("equalix.cms.estimation.drift").gauges().stream()
+            .collect(Collectors.toMap(gauge -> gauge.getId().getTag("fairnessKey"), Gauge::value));
+    }
+
+    private double gauge(String name) {
+        return registry.get(name).gauge().value();
     }
 }

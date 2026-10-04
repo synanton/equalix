@@ -160,6 +160,35 @@ lim sup⁡∣W∣→∞ϵmax⁡(W)≤ϵ∣W∣→∞limsupϵmax(W)≤ϵ
 where ϵϵ is an experimentally established error bound.
 The value of ϵϵ should be measured rather than assumed.
 
+### Measured bound (EQX-1)
+
+`ProportionalFairnessIntegrationTest` runs the real priority calculator and dispatcher against PostgreSQL with three continuously backlogged tenants, wA : wB : wC = 1 : 2 : 7. The conditions follow §5: no quotas, adaptive RPS off, and no anti-starvation promotion. Each tick dispatches up to 20 tasks, and every dispatched task is completed and replaced. Two scenarios run for 10,000 dispatches each:
+
+- **No pressure:** dispatched tasks complete within the tick, so only virtual time Tk orders the queue.
+- **With pressure:** dispatched tasks are still in flight at the next priority calculation, so the CMS pressure term p·F̂k/wk is active.
+
+Prefix ϵmax is measured over the first W dispatches. Sliding ϵmax is the worst over every contiguous window of W dispatches.
+
+| W | No pressure: prefix | No pressure: sliding | With pressure: prefix | With pressure: sliding |
+|---|---|---|---|---|
+| 10 | 0 | 0 | 0 | 0.10 |
+| 25 | 0.02 | 0.02 | 0.02 | 0.06 |
+| 100 | 0 | 0 | 0 | 0.01 |
+| 1,000 | 0 | 0 | 0 | 0.001 |
+| 10,000 | 0 | 0 | 0 | 0 |
+
+At W = 10,000 the observed shares are exactly SA = 10%, SB = 20%, SC = 70%. The results are deterministic across runs.
+
+In task counts, the error is at most 0.5 task without pressure. That is the rounding floor, because W·Ek is not always a whole number. With pressure it is at most 1.5 tasks. The asserted empirical bound is therefore:
+
+ϵmax(W) ≤ 2 / |W|
+
+This means no tenant is ever more than two tasks ahead of or behind its weighted share, in any window. For W = 10,000 this gives ϵ ≤ 0.0002.
+
+As a control, the same experiment with the virtual-time term disabled (`quantum = 0`) gives shares of 33/33/33 without pressure and 0.4/0.4/99.2 with pressure only. So the persistent Tk (§7) is what makes the weighted shares hold.
+
+Scope: the bound covers equal-cost tasks under the conditions of §5. Quota-constrained keys (§25.6), aging (EQX-4) and hierarchical keys (EQX-7) need to be measured again with the same harness.
+
 ------
 
 ## 7. Virtual Time (Persistent Fairness State)
@@ -193,7 +222,7 @@ Virtual time represents:
 
 This gives weighted fairness a persistent state rather than deriving fairness only from instantaneous load.
 
-> **Note on implementation:** The current Equalix implementation uses a simpler “current time”  approach, but the intended long‑term model is based on persistent TkTk. Future versions may migrate to this model to improve fairness guarantees.
+> **Note on implementation (EQX-3):** Equalix persists Tk in `client_virtual_time` and uses self-clocked fair queueing. When task x of key k is queued it receives a finish tag Fx = max(Fk_last, V) + sx/wk, where Fk_last is the key's previous tag and V is the system virtual time (the highest dispatched tag, stored in `scheduler_virtual_clock`). On dispatch, Tk ← max(Tk, Fx) and V ← max(V, Fx). For a continuously backlogged key this is exactly Tk ← Tk + sx/wk. The V floor stops an idle key from accumulating credit it could spend in a burst. Tags are scaled by `app.queue.virtual-time.quantum`. All tasks currently have sx = 1.
 
 ------
 
@@ -276,6 +305,37 @@ Therefore:
 Px(t)=Tk(t)+p(t)F^k(t)wk−λWx(t)Px(t)=Tk(t)+p(t)wkF^k(t)−λWx(t)
 
 As waiting time increases, the task becomes progressively more likely to be selected.
+
+### Implementation and simulation (EQX-4)
+
+`app.queue.aging.policy` selects A(W): `none` (default), `linear` λW, `log` λ·ln(1+W), or `power` λW^γ. W is in seconds and A is in priority units, where one weight-1 task costs `quantum` virtual-time units. Non-linear aging changes the relative order of queued tasks over time, so the dispatcher evaluates Px(t) = Pbase − A(Wx(t)) at selection time. It does this over a candidate pool: the best tasks by stored Pbase plus the oldest tasks. The `max-queued-time-ms` promotion remains a hard backstop.
+
+**Virtual time under aging.** A task promoted by aging is served ahead of its tag Fx. The key is still charged in full (Tk ← max(Tk, Fx)), but the system virtual time only advances to the aged position: V ← max(V, Fx − A(Wx)). Without this, one promoted task drags V forward, and every key's new work restarts from that inflated V. In the burst simulation below, advancing V to the full tag lowers the heavy tenant's minimum share over any 100 dispatches to 37% instead of 65% with `power`, and to 57% instead of 86% with `linear`.
+
+`AgingSimulationTest` runs the production VirtualTimeService and AgingService with tenants at weights 1 and 9 and a capacity of 10 tasks/s. Every policy is calibrated so that A(30 s) equals 10 weight-1 tasks:
+
+- linear: λ = 333
+- log: λ = 2912
+- power: λ = 11.1, γ = 2
+
+**Steady backlog.** Both tenants keep 50 tasks queued. The weight-1 share stays at 10% under every policy (sliding ϵmax(W=100) ≤ 0.01). With constant queue depth, each tenant's waiting time is constant, so aging adds only a constant offset per tenant, and virtual time keeps service rates proportional to weight. Aging cannot fracture long-term weighted shares.
+
+**Structural backlog.** The weight-9 tenant is backlogged, and the weight-1 tenant submits a burst of 300 tasks:
+
+| Policy | Burst wait p50 | Burst wait max | Weight-9 share while burst drains | Lowest weight-9 share over any 100 dispatches |
+|---|---|---|---|---|
+| none | 149 s | 299 s | 90% | 89% |
+| linear | 115 s | 230 s | 87% | 86% |
+| log | 137 s | 285 s | 89% | 83% |
+| power (γ=2) | 82 s | 131 s | 77% | 65% |
+
+Findings:
+
+- `power` promotes long waits most aggressively: the maximum wait drops by 56% at equal 30 s credit.
+- `log` gives a front-loaded boost that flattens, so it barely helps long waits.
+- Under every policy, the heavy tenant keeps the majority of capacity in every 100-dispatch window. Short-term weighted quotas are bent but not broken.
+
+The simulation asserts these properties.
 
 ------
 
@@ -477,6 +537,8 @@ then:
 
 This gives a direct way to measure how approximate accounting affects scheduling.
 
+**Validated (EQX-2):** `CmsErrorPropagationTest` prioritises the same 2,000 tasks twice with the production `PriorityCalculatorService`: once with a heavily loaded 1024×3 sketch (E = 14, 75% of keys overestimated) and once with exact counts. For p ∈ {10, 100, 1000} and weights {0.5, 1, 2, 7}, every task satisfies ∣P̂k − Pk∣ ≤ p·∣ek∣/wk + 1, and therefore also ≤ p·E/wk + 1. The +1 comes from the integer truncation of the pressure term.
+
 ------
 
 ## 18. Overestimation vs. Underestimation
@@ -591,6 +653,63 @@ and measure its empirical distribution:
 A formal signed-update error bound should only be introduced after  selecting and proving the properties of an appropriate data structure.
 
 In the interim, the system employs a **Watchdog** that periodically reconstructs the approximate counts from the  authoritative task table, bounding drift. This pragmatic approach  maintains safety while empirical data on error distributions is  collected.
+
+### Measured distribution (EQX-2)
+
+**Why signed updates are safe here.** Equalix updates the sketch in the *strict turnstile* model. Every −1 (completion) matches an earlier +1 (dispatch) of the same key, so every true count stays Fk ≥ 0. Under that condition, the classical Count-Min guarantees still hold:
+
+- **No underestimation:** every cell is at least the key's own count, so ek ≥ 0.
+- **Bounded overestimation:** ek ≤ 2N/w with probability ≥ 1 − 2⁻ᵈ.
+
+Here N is the **current** total in flight, not the number of updates made since the last rebuild. Error therefore does not accumulate with traffic. Underestimation can only come from accounting faults, where an update is applied without its matching DB change.
+
+**Experiment.** `CmsSignedUpdateErrorExperimentTest` sends a seeded stream of +1/−1 updates to `CountMinSketchAdapter`:
+
+- about 5,000 tasks in flight, over Zipf-distributed keys (exponent 1.1);
+- one watchdog window: 300,000 updates, i.e. 5 minutes at 1,000 updates/s;
+- 60 samples per window, of every key that was ever dispatched.
+
+| Sketch               | Keys           | Samples       | Mean e | p95 ∣e∣ | p99 ∣e∣ | Max | Over  | Under | 2N/w | Samples > 2N/w |
+|----------------------|----------------|---------------|--------|---------|---------|-----|-------|-------|------|----------------|
+| 1024×3 (test)        | 1,000          | 58,651        | 0.17   | 1       | 3       | 13  | 10.5% | 0     | 9.6  | 0.055%         |
+| 1024×3 (test)        | 10,000         | 373,857       | 0.55   | 2       | 4       | 25  | 38.6% | 0     | 9.7  | 0.042%         |
+| 1024×3 (test)        | 50,000         | 699,283       | 0.76   | 2       | 4       | 23  | 51.6% | 0     | 9.7  | 0.031%         |
+| 65536×5 (production) | 1k / 10k / 50k | up to 699,283 | 0      | 0       | 0       | 0   | 0     | 0     | 0.15 | 0              |
+
+With exact accounting:
+
+- **No underestimation** in about 2.4 million samples.
+- The 2N/w bound is exceeded far less often than the allowed 2⁻ᵈ.
+- The **production-size sketch was exact in every sample, even with 50,000 keys.** Error depends on the number of keys *currently in flight* (at most N), not on how many keys exist.
+
+Figures are for the 64-bit key hashing introduced after EQX-2 (see below). With the earlier 32-bit hashing, the sequential test ids `tenant-0…tenant-N` were spread more evenly than a random hash would spread them, so the test-size tail looked lighter (max 13–14, about 0.01% of samples above 2N/w). The figures above are the honest random-hash behaviour. The production-size results are unchanged.
+
+**Accounting faults.** In EQX-2, `cms.add` ran inside the dispatch and completion transactions. A rollback therefore left a phantom +1 (a dispatch that never happened) or an extra −1 (a completion rolled back and then retried). Injecting each fault at 0.1% gives:
+
+| Sketch  | Mean e | Min | Max | p99 ∣e∣ | Over  | Under |
+|---------|--------|-----|-----|---------|-------|-------|
+| 65536×5 | 0.001  | −4  | +5  | 1       | 0.67% | 0.52% |
+| 1024×3  | 0.55   | −4  | +27 | 4       | 38.8% | 0.48% |
+
+Faults are never reversed within a window, so drift grows in both directions until the watchdog rebuild resets it. After the rebuild, the error is back to exact-accounting behaviour.
+
+**Fixed:** CMS updates are now buffered per transaction and applied only after commit (`TransactionAwareCmsProvider`), so rollbacks leave the sketch untouched. The fault scenario stays in the experiment to show what drift looks like if updates are ever lost, for example on a crash between the commit and the sketch update.
+
+![CMS error distribution](images/eqx-2/error-histogram.png)
+
+![CMS error between rebuilds](images/eqx-2/error-timeline.png)
+
+The charts are generated by `docs/samples/plot_cms_error.py` from the CSV output in `target/eqx-2/`.
+
+**Hash-code collisions (fixed).** In EQX-2, every sketch row was derived from the 32-bit `String.hashCode()`. Keys with equal hash codes shared all d cells, and no sketch size could separate them. For example, with 40 tasks in flight for `tenant-BB`, an idle `tenant-Aa` was estimated at 40. Rows are now derived from a 64-bit hash of the key's UTF-8 bytes (`CmsKeyHasher`), so two keys share all rows only if their 64-bit hashes collide, with probability of about K²/2⁶⁵. The cell layout changed, so the Redis sketch moved to a versioned key (`…:v2`).
+
+**Restarts (fixed).** A restarted instance used to start with an empty local sketch and underestimate every key until the first watchdog run. The sketch is now rebuilt from in-flight tasks at startup.
+
+**Consequences:**
+
+- **Drift alerts (EQX-5, implemented).** The watchdog publishes ek per key (`equalix.cms.estimation.drift`) and in aggregate just before each rebuild; see Operations. With a production-size sketch and exact accounting, ek = 0 is the expected value. Any sustained ∣ek∣ ≥ 1 points to lost updates, not sketch noise. For small sketches, use the measured p99 (4 for 1024×3 at 5,000 in flight) as the noise floor.
+- **Priority error.** Through §17, a p99 error of 4 bounds the priority error at 4p/wk.
+- **Follow-ups (done):** CMS updates apply after commit, row hashes come from a 64-bit hash of the key bytes, and the sketch is rebuilt at startup.
 
 ------
 
@@ -732,7 +851,7 @@ TkTk
 
 as persistent accumulated virtual time, or adopt the simpler current-time formulation?
 
-**Current stance:** The mathematical model uses persistent TkTk; the implementation may use a simplification. Future work will evaluate the benefits of full persistence.
+**Resolved (EQX-3):** Equalix uses persistent accumulated virtual time Tk with a system virtual-time floor V (see §7). Long-term convergence to the weighted shares is validated in EQX-1.
 
 ### 25.2 Pressure coefficient
 
@@ -760,19 +879,19 @@ or:
 
 A(W)=λWγA(W)=λWγ
 
-**Current:** Linear aging is used; non-linear forms are under investigation to improve response to long waits.
+**Implemented (EQX-4):** `none`, `linear`, `log` and `power` are configurable; the default is `none`. The trade-offs measured by simulation are in §10. Use `power` with γ > 1 when long waits must be bounded, and `log` when disruption must stay minimal.
 
 ### 25.4 CMS semantics
 
 What data structure provides useful and defensible error bounds when counters can both increment and decrement?
 
-**Interim:** Empirical error measurement + Watchdog reconstruction. Formal analysis is deferred.
+**Answered for Equalix's usage (EQX-2):** Updates follow the strict turnstile model, so the standard Count-Min sketch keeps its guarantees: ek ≥ 0, and ek ≤ 2N/w with probability ≥ 1 − 2⁻ᵈ, where N is the current in-flight total. The measurements in §20 confirm this. Drift in both directions could only come from accounting faults and hash-code collisions. Both are fixed: updates apply after commit, and keys use 64-bit hashing. The Watchdog interval bounds any remaining lost update. A general-turnstile structure is not needed unless updates stop being paired.
 
 ### 25.5 Fairness window
 
 What constitutes a "sufficiently large" window WW?
 
-**Plan:** This will be determined experimentally via simulation and production benchmarks.
+**Measured (EQX-1):** Under continuous backlog, weighted shares hold to within 2 tasks over any window (ϵmax(W) ≤ 2/|W|, see §6). Windows of a few hundred dispatches are therefore already within 1%. Production benchmarks with irregular arrivals are still pending.
 
 ### 25.6 Fairness under quota constraints
 
@@ -788,7 +907,45 @@ R(t)R(t)
 
 when executor latency and error rates fluctuate?
 
-**Interim:** Hysteresis and smoothing are applied; formal stability analysis is a future task.
+**Evaluated (EQX-6):** Stability is achieved by rate-limiting the controller, dampening direction reversals, and smoothing the latency signal. A formal stability proof is still open.
+
+**Why the original controller over-throttled.** It re-evaluated its 100-completion window after *every* completion and applied a multiplicative step each time. One latency spike stays in the window for 100 completions, so it was applied up to 100 times (×0.9 each, or ×0.5 for the error brake) until R(t) hit `min-rps`. At that rate, the count-based window then took minutes to refresh. Smoothing or a dampener alone cannot fix this: both still act on every completion.
+
+**Controls.**
+
+- **Adjustment interval Δ:** R(t) changes at most once per Δ. Each evaluation uses the mean latency of the completions since the previous one.
+- **Latency EMA:** L̃ ← α·L + (1−α)·L̃. The time constant ≈ Δ/α, independent of the completion rate.
+- **Dead-band dampener:** a reversal needs c consecutive agreeing evaluations, and the dead band resets the count. The emergency brake bypasses it but is still limited to one step per Δ.
+
+**Simulation.** `AdaptiveRpsStabilitySimulationTest` runs the real controller in closed loop against an executor model:
+
+- latency base/(1 − ρ) with base 100 ms, target 200 ms and ±20% dead band, so the ideal operating point is ρ = 0.5;
+- log-normal noise on every sample;
+- errors when overloaded;
+- a 25-minute measurement.
+
+Four workloads:
+
+- *transient*: ×4 latency for 2 s every 20 s;
+- *long spikes*: ×4 for 10 s every 120 s;
+- *capacity loss*: capacity halves for 5 minutes;
+- *low-rate noisy*: capacity 6/s, σ = 0.8.
+
+Over-throttled means below half the ideal rate; overloaded means load-induced latency above twice the target.
+
+| Configuration (α, Δ, c) | Transient: over-throttled / reversals per h | Long spikes: over-throttled | Capacity loss: over-throttled / overloaded | Low-rate: over-throttled / reversals per h |
+|---|---|---|---|---|
+| stock (1, 0, 1) | 97.1% / 55 | 98.1% | 58.5% / 0.6% | 95.7% / 17 |
+| stock + EMA (0.7, 0, 1) | 96.9% / 55 | 97.9% | 58.3% / 0.6% | 95.7% / 17 |
+| stock + dampener (1, 0, 3) | 98.0% / 55 | 98.3% | 58.7% / 0.5% | 95.7% / 17 |
+| interval (1, 2 s, 1) | 0% / 353 | 3.9% | 0.1% / 0.3% | 0.3% / 377 |
+| interval + EMA (0.7, 2 s, 1) | 0% / 353 | 7.0% | 0.1% / 0.3% | 0% / 247 |
+| interval + dampener (1, 2 s, 3) | 0% / 0 | 0% | 0.3% / 0.3% | 1.1% / 72 |
+| **recommended (0.7, 2 s, 3)** | **0% / 60** | **0%** | **0.4% / 0.3%** | **0% / 62** |
+
+The stock controller runs at 2.2 rps on average against an ideal of 25, and at 0.5 rps against 3 in the low-rate case. The adjustment interval removes the collapse. The dampener cuts reversals under transient spikes and noise by 80–100%. The EMA mainly helps slow, noisy executors, where each interval holds only a few samples. On the high-rate spike workloads, α = 1 is marginally better, so α is a tuning choice. A 3×3×4 grid over Δ ∈ {0.5, 1, 2} s, α ∈ {1, 0.7, 0.5} and c ∈ {1…4} favoured Δ = 2 s: a longer interval gives one spike fewer steps. The recommended settings held on four further seeds, with over-throttling ≤ 1.4% and overload ≤ 0.3% in every workload. The simulation asserts these properties.
+
+**Coupling.** p(t) = 1000/R(t) feeds the priority pressure term (§9), so a steadier R(t) also steadies priorities. EQX-7's backpressure cascading should reuse these controls rather than add a second controller.
 
 ------
 
@@ -802,7 +959,7 @@ Model→Simulation→Implementation→Benchmark→RefinementModel→Simulation�
 
 Before claiming a formal guarantee, Equalix should validate the corresponding invariant through simulation and load testing.
 
-The most important next experiment is to demonstrate weighted fairness:
+The most important next experiment is to demonstrate weighted fairness (done in EQX-1, see §6 for the measured bound):
 
 wA:wB:wC=1:2:7wA:wB:wC=1:2:7
 
@@ -819,6 +976,49 @@ ek=F^k−Fkek=F^k−Fk
 propagates into fairness error.
 
 A third experiment should evaluate the stability of the adaptive RPS controller under varying load.
+
+------
+
+## 27. Hierarchical Virtual Time (EQX-7)
+
+With `app.queue.fairness-mode: hierarchical`, a fairness key is a path through a tenant tree, and every layer is scheduled fairly among its siblings. With layers organization → department:
+
+- `acme/sales` is organization `acme/` → department `acme/sales`;
+- extra segments fold into the last layer;
+- a one-segment key such as `smallclub` is a leaf directly under the root, competing with `acme/`.
+
+This solves the two flat-mode failures:
+
+- With one key per organization, a hot department takes the organization's whole share: it is FIFO inside the key.
+- With one key per department, an organization with n departments claims n times the share of a single-key tenant.
+
+### Model
+
+Every node v has a weight wv and a virtual runtime τv, measured in its parent's virtual time; this is CFS group scheduling. For each dispatch slot, selection descends from the root. At each node it picks the backlogged child c minimising
+
+τc + q/wc + p(t)·F̂c/wc
+
+(finish time after one more task, plus that node's in-flight pressure), with ties broken by key. Every node on the chosen leaf's path is then charged τv ← τv + q/wv.
+
+**Share.** Among the backlogged children of a parent P, child c receives the fraction wc / Σ wj of P's service. A leaf's share of the whole system is the product of these fractions along its path.
+
+**Idle children.** Each parent keeps a floor mP = max(mP, min over its backlogged children of τc), taken after each tick's charges. A child that returns from idle starts at max(τc, mP), so idleness does not bank credit. This is the hierarchical counterpart of the system virtual time V in §7. Children that stay backlogged are never below mP, so the floor never takes anything from them.
+
+**Pressure per layer.** The sketch also counts every internal node and the root. The pressure term therefore cascades: a department that holds in-flight tasks is pushed back among its siblings, and its organization among the other organizations. The number of sketch entries grows by at most a factor of the number of layers plus one, and the §20 bound 2N/w grows by the same factor.
+
+Selection runs at dispatch time, not queue time. A node's share depends on which siblings are backlogged at that moment, and a priority computed at queue time cannot know that. Within a leaf, tasks keep the order of their stored priority (the §7 tag plus pressure). Tasks promoted by `max-queued-time-ms` are served first and charged normally. In hierarchical mode, aging (§10) is ignored.
+
+### Validation
+
+- **`HierarchicalSelectorTest`** (10,000 dispatches, exact to within 0.1%):
+  - a 10-department organization against a single-leaf tenant gets 50% / 50%, with each department at 5%;
+  - weights organization 3 : tenant 1 and, inside it, department 3 : 1 give 56.25% / 18.75% / 25%;
+  - a department returning after 1,000 dispatches of idleness gets 49–51 of the next 100, with no burst;
+  - flat mode reproduces the 10/11 problem.
+- **`HierarchicalFairnessIntegrationTest`** (PostgreSQL, real priority calculator and dispatcher, 2,000 dispatches each):
+  - a hot department with 10× the backlog and its sibling each get exactly 50%, with sliding ϵmax(W=100) = 0;
+  - the 10-department organization against the single-leaf tenant gets 50% / 50%, with ϵmax = 0;
+  - a sibling's first task, arriving behind 500 queued tasks of the hot department, is dispatched in the next tick.
 
 ------
 
@@ -843,4 +1043,11 @@ This is the proposed mathematical foundation for Equalix v0.2.
 **Revision history:**
 
 - v0.1 – initial draft.
+- v0.9 – hierarchical virtual time (CFS-style per-layer vruntime with idle floors, per-layer pressure, multi-layer CMS accounting) (EQX-7).
+- v0.8 – adaptive RPS stability controls (adjustment interval, latency EMA, direction dampener) evaluated by closed-loop simulation (EQX-6).
+- v0.7 – CMS updates applied after commit, 64-bit key hashing (Redis layout v2), startup warm-up; EQX-2 figures refreshed.
+- v0.6 – watchdog publishes CMS drift ek per key and in aggregate before each rebuild (EQX-5).
+- v0.5 – measured signed-update CMS error distribution and strict-turnstile bound; validated §17 priority-error bound; identified accounting-fault drift and hash-code collisions (EQX-2).
+- v0.4 – configurable aging A(W) (none/linear/log/power) evaluated at dispatch, aged system virtual time, simulation results (EQX-4).
+- v0.3 – persistent virtual time Tk implemented (EQX-3); weighted-fairness bound ϵmax(W) ≤ 2/|W| measured (EQX-1).
 - v0.2 – clarified notation (leaves LkLk), added infinite quota semantics, expanded CMS caveat with practical  mitigation, added stability as an open question, and aligned the model  with the intended persistent virtual time design.

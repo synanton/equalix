@@ -28,6 +28,8 @@ public class SequentialDispatcherService {
     private final CMSProviderPort cms;
     private final ClientCountsRepositoryPort clientCounts;
     private final RemoteExecutorPort remoteExecutor;
+    private final VirtualTimeService virtualTimeService;
+    private final HierarchicalDispatchPlanner hierarchicalDispatchPlanner;
     private final Clock clock;
 
     @Transactional
@@ -64,17 +66,18 @@ public class SequentialDispatcherService {
         }
 
         Instant now = Instant.now(clock);
-        nextTask.setStatus(TaskStatus.DISPATCHED).setUpdatedAt(now);
+        nextTask.setStatus(TaskStatus.DISPATCHED);
         taskRepository.save(nextTask);
 
         state.setCurrentExecutingTaskId(nextTask.getId())
-            .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L)
-            .setUpdatedAt(now);
+            .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L);
         sequenceStateRepository.save(state);
 
         cms.add(state.getFairnessKey(), 1);
         clientCounts.incrementInFlight(state.getFairnessKey());
         remoteExecutor.send(nextTask.getId(), nextTask.getPayload(), previousResult);
+        virtualTimeService.recordDispatch(List.of(nextTask));
+        hierarchicalDispatchPlanner.recordSequentialDispatch(nextTask);
 
         log.debug("Dispatched sequential task {} seq={} for client {}",
             nextTask.getId(), nextTask.getSequenceNumber(), state.getFairnessKey());

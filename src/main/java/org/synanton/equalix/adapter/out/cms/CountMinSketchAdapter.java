@@ -13,21 +13,16 @@ import org.synanton.equalix.domain.port.out.CMSProviderPort;
 @Slf4j
 public class CountMinSketchAdapter implements CMSProviderPort {
 
-    private static final long[] ROW_SEEDS = {
-        0xDEADBEEFDEADBEEFL, 0xCAFEBABECAFEBABEL,
-        0x0102030405060708L, 0xF0E0D0C0B0A09080L,
-        0x123456789ABCDEF0L, 0xAABBCCDD11223344L,
-        0x5566778899AABBCCL, 0x1A2B3C4D5E6F7A8BL
-    };
-
     private final int width;
     private final int depth;
+    private final CmsKeyHasher hasher;
     private long[][] table;
     private long total;
 
     public CountMinSketchAdapter(QueueProperties properties) {
         this.width = properties.getCms().getWidth();
         this.depth = properties.getCms().getDepth();
+        this.hasher = new CmsKeyHasher(width, depth);
         this.table = newTable();
         log.info("Initialized CountMinSketch width={} depth={}", width, depth);
     }
@@ -37,17 +32,19 @@ public class CountMinSketchAdapter implements CMSProviderPort {
         if (delta == 0) {
             return;
         }
+        int[] cells = hasher.cells(key);
         for (int row = 0; row < depth; row++) {
-            table[row][hashCell(key, row)] += delta;
+            table[row][cells[row]] += delta;
         }
         total += delta;
     }
 
     @Override
     public synchronized long estimateCount(String key) {
+        int[] cells = hasher.cells(key);
         long min = Long.MAX_VALUE;
         for (int row = 0; row < depth; row++) {
-            min = Math.min(min, table[row][hashCell(key, row)]);
+            min = Math.min(min, table[row][cells[row]]);
         }
         return Math.max(0L, min == Long.MAX_VALUE ? 0L : min);
     }
@@ -67,15 +64,5 @@ public class CountMinSketchAdapter implements CMSProviderPort {
 
     private long[][] newTable() {
         return new long[depth][width];
-    }
-
-    private int hashCell(String key, int row) {
-        long hash = key.hashCode() ^ ROW_SEEDS[row % ROW_SEEDS.length];
-        hash ^= hash >>> 33;
-        hash *= 0xff51afd7ed558ccdL;
-        hash ^= hash >>> 33;
-        hash *= 0xc4ceb9fe1a85ec53L;
-        hash ^= hash >>> 33;
-        return Math.floorMod(hash, width);
     }
 }
