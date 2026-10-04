@@ -63,8 +63,7 @@ public class ClientBlockRecoveryService {
         state.setBlocked(false)
             .setCurrentExecutingTaskId(null)
             .setLastCompletedSequence(lastCompleted)
-            .setBlockedAt(null)
-            .setUpdatedAt(now);
+            .setBlockedAt(null);
         sequenceStateRepository.save(state);
     }
 
@@ -74,8 +73,7 @@ public class ClientBlockRecoveryService {
         }
         task.setStatus(TaskStatus.FAILED)
             .setLastError("Force-unblocked by ClientBlockRecoveryService after timeout")
-            .setCompletedAt(now)
-            .setUpdatedAt(now);
+            .setCompletedAt(now);
         taskRepository.save(task);
         cms.add(task.getFairnessKey(), -1);
         clientCounts.decrementInFlight(task.getFairnessKey());

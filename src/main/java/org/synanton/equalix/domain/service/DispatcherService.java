@@ -59,7 +59,7 @@ public class DispatcherService {
 
         Instant now = Instant.now(clock);
         for (Task task : tasks) {
-            task.setStatus(TaskStatus.DISPATCHED).setUpdatedAt(now);
+            task.setStatus(TaskStatus.DISPATCHED);
             taskRepository.save(task);
             cms.add(task.getFairnessKey(), 1);
             clientCounts.incrementInFlight(task.getFairnessKey());
@@ -81,7 +81,7 @@ public class DispatcherService {
         Instant now = Instant.now(clock);
         for (Task task : starved) {
             // Boost priority to zero to force this task to the front regardless of quota
-            task.setPriority(0L).setUpdatedAt(now);
+            task.setPriority(0L);
             taskRepository.save(task);
         }
         log.warn("Promoted {} starved tasks to front of queue", starved.size());

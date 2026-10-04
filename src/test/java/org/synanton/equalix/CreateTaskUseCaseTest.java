@@ -63,7 +63,8 @@ class CreateTaskUseCaseTest {
             .setStatus(TaskStatus.RECEIVED)
             .setRetryCount(0)
             .setCreatedAt(FIXED_NOW)
-            .setUpdatedAt(FIXED_NOW)
+            // DB-clock unification: the use case no longer stamps updated_at;
+            // the trigger assigns it on persist (null at domain level here).
             .setSequential(false)
             .setRequiresPreviousResult(false));
         verify(sequenceStateRepository, never()).findOrCreate(any());

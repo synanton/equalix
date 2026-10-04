@@ -47,8 +47,7 @@ public class PriorityCalculatorService {
         for (Task task : receivedTasks) {
             long priority = calculatePriority(task, now, penaltyFactor);
             task.setPriority(priority)
-                .setStatus(TaskStatus.QUEUED)
-                .setUpdatedAt(Instant.now(clock));
+                .setStatus(TaskStatus.QUEUED);
             taskRepository.save(task);
         }
         log.debug("Calculated priorities for {} tasks", receivedTasks.size());

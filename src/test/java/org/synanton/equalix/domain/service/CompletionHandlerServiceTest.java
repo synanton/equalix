@@ -56,7 +56,9 @@ class CompletionHandlerServiceTest {
         assertThat(task.getResult()).isSameAs(result);
         assertThat(task.getLastError()).isNull();
         assertThat(task.getCompletedAt()).isEqualTo(FIXED_NOW);
-        assertThat(task.getUpdatedAt()).isEqualTo(FIXED_NOW);
+        // DB-clock unification: the service no longer stamps updated_at;
+        // the dispatch-time value passes through untouched.
+        assertThat(task.getUpdatedAt()).isEqualTo(DISPATCH_AT);
 
         verify(taskRepository).save(task);
         verify(cms).add("k", -1L);

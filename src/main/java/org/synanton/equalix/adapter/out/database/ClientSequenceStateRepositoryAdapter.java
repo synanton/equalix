@@ -20,13 +20,12 @@ public class ClientSequenceStateRepositoryAdapter implements ClientSequenceState
     public ClientSequenceState findOrCreate(String fairnessKey) {
         return jpaRepository.findById(fairnessKey)
             .map(this::toDomain)
-            .orElseGet(() -> {
+            .orElseGet(() -> {;
                 ClientSequenceStateEntity entity = new ClientSequenceStateEntity()
                     .setFairnessKey(fairnessKey)
                     .setLastCompletedSequence(0L)
                     .setLastDispatchedSequence(0L)
-                    .setBlocked(false)
-                    .setUpdatedAt(clock.instant());
+                    .setBlocked(false);
                 return toDomain(jpaRepository.save(entity));
             });
     }

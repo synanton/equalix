@@ -26,7 +26,7 @@ public class DispatchAckService {
                 return;
             }
             Instant now = Instant.now(clock);
-            task.setStatus(TaskStatus.COMMITTED).setUpdatedAt(now);
+            task.setStatus(TaskStatus.COMMITTED);
             taskRepository.save(task);
             log.debug("Task {} marked COMMITTED", taskId);
         });
