@@ -1,4 +1,8 @@
 spring:
+  # NOTE: there is no spring.task.scheduling.enabled property in Boot
+  # (TaskSchedulingProperties has no `enabled` field); a flag here would be
+  # silently ignored. Scheduling is disabled in tests via @MockBean
+  # scheduler components in BaseIntegrationTest — see the comment there.
   datasource:
     url: jdbc:tc:postgresql:16:///equalix
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
