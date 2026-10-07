@@ -366,6 +366,16 @@ Development: `mvn clean verify` runs the full test suite, unit and integration. 
 
 ------
 
+## Family
+
+Equalix has three implementations of the same scheduling semantics:
+Spring Boot ([equalix](https://github.com/synanton/equalix), the reference),
+Go ([equalix-go](https://github.com/synanton/equalix-go)), and Micronaut
+([equalix-micronaut](https://github.com/synanton/equalix-micronaut)).
+
+Startup, footprint and runtime characterization across all three:
+[**Equalix family comparison →**](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md).
+
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE).
