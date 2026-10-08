@@ -35,7 +35,7 @@ and caps effective throughput.
 **Equalix's solution** replaces the count query with a
 [Count-Min Sketch](https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch) (CMS) - a probabilistic
 in-memory structure that answers "how many tasks does this fairness key have in flight?" in O(1)
-time using fixed memory (~128 KB for 10,000 fairness keys). Combined with a **virtual-time
+time using fixed memory (~2.6 MB with the default 65536×5 sketch). Combined with a **virtual-time
 priority algorithm** that automatically penalizes fairness keys with many in-flight tasks and an
 **Adaptive RPS controller** that throttles dispatching when the downstream executor is under
 stress, Equalix provides fair, high-throughput, resilient scheduling across any number of
@@ -156,22 +156,31 @@ Table `tasks`:
 |------------------------|----------------|---------------------------------------------------------------|
 | `id`                   | UUID PK        |                                                               |
 | `fairness_key`         | VARCHAR(255)   | Identifies the logical group                                  |
-| `weight`               | DECIMAL(10,4)  | Default 1.0                                                   |
+| `weight`               | DECIMAL(10,4)  | Default 1.0, `CHECK (weight > 0)`; ingestion validates the same invariant |
 | `status`               | ENUM           | RECEIVED → QUEUED → DISPATCHED → COMMITTED → SUCCEEDED/FAILED/TIMEOUT |
 | `priority`             | BIGINT NULL    | Virtual finish tag + in-flight pressure; null until QUEUED    |
 | `virtual_finish`       | DOUBLE NULL    | Weighted virtual finish tag (see §5.5); null until QUEUED     |
 | `payload`              | BYTEA          | Opaque binary                                                 |
 | `created_at`           | TIMESTAMPTZ    |                                                               |
-| `updated_at`           | TIMESTAMPTZ    |                                                               |
+| `updated_at`           | TIMESTAMPTZ    | DB-assigned by `trg_set_updated_at` on every write (see below) |
 | `completed_at`         | TIMESTAMPTZ    | Set on final states                                           |
 | `retry_count`          | INT            |                                                               |
-| `last_error`           | TEXT           |                                                               |
+| `last_error`           | TEXT          |                                                               |
 | `result`               | BYTEA          | Stored on completion for sequential passthrough               |
-| Sequential columns     |                | See §14                                                       |
+| Sequential columns     |                | See §14 (`depends_on_task_id` has no FK: successors may be ingested before the predecessor row exists; recovery reconciles them) |
 | `version`              | BIGINT         | Optimistic locking                                            |
 
 Indexes: `(status, priority)` for the dispatcher, `(status, created_at)` for anti-starvation and
-cleanup.
+cleanup, `(fairness_key, created_at)` for per-key lookups, partial
+`(fairness_key) WHERE status IN ('DISPATCHED','COMMITTED')` for Watchdog reconciliation, partial
+`(updated_at) WHERE status IN ('DISPATCHED','COMMITTED')` for the timeout sweep, plus the
+sequential (§14) and hierarchical (§9.5) indexes.
+
+`updated_at` is owned by the database: a `BEFORE INSERT OR UPDATE` trigger stamps it from the
+DB clock on every write (fresh `INSERT`s with an explicit non-NULL value keep it, for backfills
+and tests). Application code must not set it. One consequence: after a JPA `save()`, the
+in-memory entity's `updatedAt` is stale until the row is re-read; threshold scans always read
+from the database, so they never observe the stale value.
 
 ### 5.3 `client_counts` - durable in-flight counter
 
@@ -356,9 +365,9 @@ with `status IN ('DISPATCHED','COMMITTED')`. At scale:
 | Metric                            | SQL `COUNT(*)`                | CMS (in-memory)                              |
 |-----------------------------------|-------------------------------|----------------------------------------------|
 | Time per query                    | ms to seconds                 | on the order of tens of ns                   |
-| Memory                            | scales with data + indexes    | fixed (~128 KB – 2.6 MB depending on `w`)    |
+| Memory                            | scales with data + indexes    | fixed (~2.6 MB with the defaults)            |
 | Database load                     | high - locks and I/O per cycle | none                                         |
-| Accuracy                          | 100 %                         | approximate; error < 1 % at `w=65536`, `d=5` |
+| Accuracy                          | 100 %                         | approximate; overestimates by at most `2N/w` with probability `1 − 2^−d` (`N` = tasks in flight) |
 | Scales to 10,000 fairness keys    | slow                          | ~50 ns / lookup                              |
 
 Because the dispatcher already has `client_counts` as an authoritative fallback for hard quotas
@@ -381,12 +390,15 @@ Matrix of `d` rows × `w` columns, each row using an independent hash function.
   `δ = (1/2)^d`. With `d=5`, δ ≤ 3 %.
 - **Memory** - `w × d × 8` bytes. `w=65536`, `d=5` → ~2.6 MB.
 
-Practical sizing:
+Practical sizing (error depends on tasks in flight `N`, not on the number of keys -
+it never underestimates and overestimates by at most `2N/w`):
 
-| Active fairness keys | `width`  | `depth` | Memory  | Error |
-|----------------------|----------|---------|---------|-------|
-| ≤ 10 K               | 65 536   | 5       | ~2.6 MB | <0.003 % |
-| ≤ 100 K              | 131 072  | 5       | ~5 MB   | <0.0015 % |
+| Tasks in flight (`N`) | `width`  | `depth` | Memory  | Worst overestimate (`2N/w`) |
+|-----------------------|----------|---------|---------|------------------------------|
+| ≤ 5 K                 | 65 536   | 5       | ~2.6 MB | < 0.2 counts                 |
+| ≤ 50 K                | 131 072  | 5       | ~5 MB   | < 0.8 counts                 |
+
+With the defaults and 5,000 tasks in flight, measured error was 0 even with 50,000 keys.
 
 `depth > 5` shows diminishing returns.
 
@@ -487,7 +499,10 @@ excludes fairness keys already at quota. Set to 0 to disable.
 ### 9.3 Anti-starvation
 
 Tasks queued longer than `app.queue.max-queued-time-ms` are promoted (priority set to 0) at the
-top of each dispatcher tick, bypassing quota checks.
+top of each dispatcher tick. Promoted tasks bypass the per-key quota: the flat dispatch queries
+carry an `OR priority <= 0` bypass, and the hierarchical selector serves promoted picks before
+(and outside) each leaf's quota capacity. Promotion is therefore a hard backstop, not merely a
+reordering within quota.
 
 ### 9.4 Why "eventually" fair
 
@@ -714,11 +729,12 @@ SLA (§7.7).
 
 ### 15.3 Flyway migrations
 
-| Migration                                       | Content                                                              |
-|-------------------------------------------------|----------------------------------------------------------------------|
-| `V1__create_tasks_and_client_counts.sql`        | `tasks` + `client_counts` tables and indexes                         |
-| `V2__create_shedlock.sql`                       | `shedlock` table for distributed locks                               |
-| `V3__add_sequential_execution.sql`              | Sequential columns on `tasks` + `client_sequence_state` table         |
+A single squashed baseline (`V1__baseline.sql`) creates the full schema: `tasks` (all columns,
+including sequential and `virtual_finish`), `client_counts`, `client_sequence_state`,
+`client_virtual_time`, `scheduler_virtual_clock` (seeded with `V = 0`), `hierarchy_node`,
+`shedlock`, all indexes, and the `trg_set_updated_at` triggers. There is no upgrade path from
+the pre-release V1..V6 chain, which never ran in production. The Go sibling's `00005` migration
+carries the same trigger; keep the two in sync.
 
 ---
 

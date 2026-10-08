@@ -29,6 +29,7 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
             :maxPerClient IS NULL
          OR cc.in_flight_count < :maxPerClient
          OR cc.in_flight_count IS NULL
+         OR t.priority <= 0
       )
     ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
     LIMIT :limit
@@ -50,6 +51,7 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
             :maxPerClient IS NULL
          OR cc.in_flight_count < :maxPerClient
          OR cc.in_flight_count IS NULL
+         OR t.priority <= 0
       )
     ORDER BY t.created_at ASC, t.id ASC
     LIMIT :limit
@@ -117,8 +119,9 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
         """)
     List<TaskEntity> findTasksWaitingForPreviousResult(@Param("status") TaskStatus status);
 
+    // updated_at is DB-assigned by trg_set_updated_at; no need to set it here.
     @Modifying
-    @Query("UPDATE TaskEntity t SET t.status = :newStatus, t.updatedAt = CURRENT_TIMESTAMP WHERE t.id IN :ids")
+    @Query("UPDATE TaskEntity t SET t.status = :newStatus WHERE t.id IN :ids")
     int updateStatusBatch(@Param("ids") List<UUID> ids, @Param("newStatus") TaskStatus newStatus);
 
     @Query("""
