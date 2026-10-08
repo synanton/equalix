@@ -19,6 +19,26 @@ jobs:
         with:
           mdbook-version: "0.4.51"
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-mdbook-katex-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mdbook-katex-
+
+      - name: Install mdbook-katex
+        run: |
+          if ! command -v mdbook-katex &> /dev/null; then
+            cargo install mdbook-katex --version "^0.9"
+          fi
+
       - name: Build book
         run: mdbook build
         working-directory: docs
