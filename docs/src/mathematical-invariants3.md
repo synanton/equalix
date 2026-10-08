@@ -13,21 +13,21 @@ Equalix is a capacity allocator for continuously backlogged multi-tenant workloa
 
 Let:
 
-- \(K\) — set of fairness keys / tenants.
-- \(k \in K\) — one fairness key.
-- \(w_k > 0\) — configured weight of key \(k\).
-- \(Q_k \in \mathbb{N} \cup \{\infty\}\) — concurrency quota (infinite allowed).
-- \(F_k(t)\) — authoritative number of in-flight tasks at time \(t\).
-- \(\hat{F}_k(t)\) — approximate in-flight estimate used by the scheduler.
-- \(q_k(t)\) — number of queued/eligible tasks.
-- \(W_x(t)\) — waiting time of task \(x\).
-- \(R(t)\) — global dispatch-rate budget.
-- \(C_{\max}\) — global in-flight capacity.
-- \(F_{\text{global}}(t)\) — total authoritative in-flight work.
-- \(T_k(t)\) — accumulated virtual scheduling time (persistent fairness state).
-- \(p(t)\) — in-flight pressure coefficient.
-- \(\lambda\) — aging coefficient.
-- \(P_x(t)\) — effective priority of task \(x\).
+- $K$ — set of fairness keys / tenants.
+- $k \in K$ — one fairness key.
+- $w_k > 0$ — configured weight of key $k$.
+- $Q_k \in \mathbb{N} \cup \{\infty\}$ — concurrency quota (infinite allowed).
+- $F_k(t)$ — authoritative number of in-flight tasks at time $t$.
+- $\hat{F}_k(t)$ — approximate in-flight estimate used by the scheduler.
+- $q_k(t)$ — number of queued/eligible tasks.
+- $W_x(t)$ — waiting time of task $x$.
+- $R(t)$ — global dispatch-rate budget.
+- $C_{\max}$ — global in-flight capacity.
+- $F_{\text{global}}(t)$ — total authoritative in-flight work.
+- $T_k(t)$ — accumulated virtual scheduling time (persistent fairness state).
+- $p(t)$ — in-flight pressure coefficient.
+- $\lambda$ — aging coefficient.
+- $P_x(t)$ — effective priority of task $x$.
 
 The fundamental distinction is:
 
