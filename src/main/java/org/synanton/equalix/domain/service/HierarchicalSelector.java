@@ -51,7 +51,11 @@ public final class HierarchicalSelector {
             int capacity = maxPerClient == null
                 ? leaf.queued()
                 : Math.min(leaf.queued(), Math.max(0, maxPerClient - leaf.inFlight()));
-            if (capacity <= 0) {
+            // Starvation-promoted tasks bypass the quota: they are served first even when
+            // the leaf is at its ceiling, mirroring the flat dispatcher's priority <= 0 bypass.
+            int promoted = Math.min(leaf.promoted(), leaf.queued());
+            int remaining = Math.min(leaf.queued(), capacity + promoted);
+            if (remaining <= 0) {
                 continue;
             }
             Node parent = root;
@@ -67,8 +71,8 @@ public final class HierarchicalSelector {
                 }
                 parent = current;
             }
-            parent.remaining = capacity;
-            parent.promoted = Math.min(leaf.promoted(), capacity);
+            parent.remaining = remaining;
+            parent.promoted = Math.min(promoted, remaining);
             for (Node node = parent; node != null; node = node.parent) {
                 node.activeLeaves++;
             }
