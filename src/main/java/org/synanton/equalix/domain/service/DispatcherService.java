@@ -115,7 +115,6 @@ public class DispatcherService {
             return;
         }
 
-        Instant now = Instant.now(clock);
         for (Task task : starved) {
             // Boost priority to zero to force this task to the front regardless of quota
             task.setPriority(0L);
