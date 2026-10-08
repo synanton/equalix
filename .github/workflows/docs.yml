@@ -17,7 +17,7 @@ jobs:
 
       - uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: "0.4.51"
+          mdbook-version: "0.5.4"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -36,7 +36,7 @@ jobs:
       - name: Install mdbook-katex
         run: |
           if ! command -v mdbook-katex &> /dev/null; then
-            cargo install mdbook-katex --version "^0.9"
+            cargo install mdbook-katex
           fi
 
       - name: Build book
