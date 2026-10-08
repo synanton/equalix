@@ -14,5 +14,6 @@ git-repository-url = "https://github.com/synanton/equalix"
 edit-url-template = "https://github.com/synanton/equalix/edit/main/docs/{path}"
 default-theme = "navy"
 preferred-dark-theme = "navy"
+
 [output.html.fold]
 enable = true
