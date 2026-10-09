@@ -55,9 +55,9 @@ public class PriorityCalculatorService {
         for (Task task : receivedTasks) {
             double finishTag = virtualTimeService.assignFinishTag(task, systemVirtualTime);
             long priority = calculatePriority(task, finishTag, penaltyFactor);
-            task.setPriority(priority)
-                .setStatus(TaskStatus.QUEUED);
-            taskRepository.save(task);
+            // Targeted UPDATE (no merge round-trip); a zero rowcount means the task moved
+            // concurrently (e.g. timed out between load and tag) — skip it.
+            taskRepository.markQueued(task.getId(), priority, task.getVirtualFinish());
         }
         log.debug("Calculated priorities for {} tasks", receivedTasks.size());
     }

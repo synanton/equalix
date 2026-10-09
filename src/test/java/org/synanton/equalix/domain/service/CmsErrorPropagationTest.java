@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -19,6 +21,7 @@ import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.synanton.equalix.adapter.out.cms.CountMinSketchAdapter;
 import org.synanton.equalix.config.properties.QueueProperties;
 import org.synanton.equalix.domain.model.CmsErrorStatistics;
@@ -114,6 +117,16 @@ class CmsErrorPropagationTest {
 
         new PriorityCalculatorService(taskRepository, mock(ClientSequenceStateRepositoryPort.class), cms,
             adaptiveRpsController, virtualTimeService, props, Clock.fixed(NOW, ZoneOffset.UTC)).run();
+        // The service persists priorities via markQueued instead of mutating the objects;
+        // write them back so the comparison above can read them.
+        ArgumentCaptor<UUID> ids = ArgumentCaptor.forClass(UUID.class);
+        ArgumentCaptor<Long> priorities = ArgumentCaptor.forClass(Long.class);
+        verify(taskRepository, times(tasks.size())).markQueued(ids.capture(), priorities.capture(), any());
+        Map<UUID, Long> byId = new HashMap<>();
+        for (int i = 0; i < ids.getAllValues().size(); i++) {
+            byId.put(ids.getAllValues().get(i), priorities.getAllValues().get(i));
+        }
+        tasks.forEach(task -> task.setPriority(byId.get(task.getId())));
     }
 
     private static Task receivedTask(String fairnessKey, String weight) {

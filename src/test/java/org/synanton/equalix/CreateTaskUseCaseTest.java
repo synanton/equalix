@@ -50,7 +50,7 @@ class CreateTaskUseCaseTest {
         useCase = new CreateTaskUseCase(
             taskRepository, sequenceStateRepository, queueProperties,
             FairnessHierarchyTest.hierarchy(FairnessMode.FLAT, Map.of()), Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
-        when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(taskRepository.insert(any())).thenAnswer(inv -> inv.getArgument(0));
         when(sequenceStateRepository.findOrCreate(any()))
             .thenAnswer(inv -> new ClientSequenceState().setFairnessKey(inv.getArgument(0)));
     }

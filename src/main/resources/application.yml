@@ -28,6 +28,10 @@ app:
   scheduling:
     # Runs the priority calculator, dispatchers, watchdog and recovery jobs.
     enabled: true
+    # JDBC-distributed ShedLock coordination across instances. Set to false for
+    # single-instance deployments to skip lock acquire/release traffic (~140
+    # statements/s at default cadences). NEVER false with 2+ instances.
+    distributed-locks: true
   security:
     api-key: ${EQUALIX_API_KEY:changeme}
   executor:

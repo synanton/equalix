@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 import java.math.BigDecimal;
@@ -15,6 +16,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -66,8 +68,7 @@ class PriorityCalculatorServiceTest {
         service.run();
 
         long expectedPriority = (long) FINISH_TAG + (long) (3 * 200.0);
-        assertThat(task.getPriority()).isEqualTo(expectedPriority);
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.QUEUED);
+        verify(taskRepository).markQueued(task.getId(), expectedPriority, null);
     }
 
     @Test
@@ -89,9 +90,9 @@ class PriorityCalculatorServiceTest {
 
         long lightPriority = (long) FINISH_TAG + (long) (4 * 100.0 / 1.0);
         long heavyPriority = (long) FINISH_TAG + (long) (4 * 100.0 / 2.0);
-        assertThat(light.getPriority()).isEqualTo(lightPriority);
-        assertThat(heavy.getPriority()).isEqualTo(heavyPriority);
-        assertThat(heavy.getPriority()).isLessThan(light.getPriority());
+        verify(taskRepository).markQueued(light.getId(), lightPriority, null);
+        verify(taskRepository).markQueued(heavy.getId(), heavyPriority, null);
+        assertThat(heavyPriority).isLessThan(lightPriority);
     }
 
     @Test
@@ -117,7 +118,7 @@ class PriorityCalculatorServiceTest {
 
         long expectedBoost = (5L - 2L) * 100L;
         long expectedPriority = (long) FINISH_TAG + expectedBoost;
-        assertThat(task.getPriority()).isEqualTo(expectedPriority);
+        verify(taskRepository).markQueued(task.getId(), expectedPriority, null);
     }
 
     @Test
@@ -141,11 +142,13 @@ class PriorityCalculatorServiceTest {
 
         service.run();
 
-        assertThat(task.getPriority()).isGreaterThanOrEqualTo((long) FINISH_TAG + 10_000L);
+        ArgumentCaptor<Long> priority = ArgumentCaptor.captor();
+        verify(taskRepository).markQueued(eq(task.getId()), priority.capture(), isNull());
+        assertThat(priority.getValue()).isGreaterThanOrEqualTo((long) FINISH_TAG + 10_000L);
     }
 
     @Test
-    void shouldPersistEachTaskWithASingleSaveAndNoBatchStatusUpdate() {
+    void shouldPersistEachTaskWithASingleTargetedUpdate() {
         QueueProperties props = queueProps();
         service = new PriorityCalculatorService(
             taskRepository, sequenceStateRepository, cms, adaptiveRpsController, virtualTimeService, props,
@@ -161,8 +164,9 @@ class PriorityCalculatorServiceTest {
 
         service.run();
 
-        verify(taskRepository, times(1)).save(a);
-        verify(taskRepository, times(1)).save(b);
+        verify(taskRepository, times(1)).markQueued(a.getId(), (long) FINISH_TAG, null);
+        verify(taskRepository, times(1)).markQueued(b.getId(), (long) FINISH_TAG, null);
+        verify(taskRepository, never()).save(any());
         verify(taskRepository, never()).updateStatusBatch(any(), any());
     }
 
@@ -207,8 +211,10 @@ class PriorityCalculatorServiceTest {
         inOrder.verify(virtualTimeService).assignFinishTag(first, SYSTEM_VIRTUAL_TIME);
         inOrder.verify(virtualTimeService).assignFinishTag(second, SYSTEM_VIRTUAL_TIME);
         inOrder.verify(virtualTimeService).assignFinishTag(third, SYSTEM_VIRTUAL_TIME);
-        assertThat(List.of(first.getPriority(), second.getPriority(), third.getPriority()))
-            .containsExactly(41_000L, 41_000L, 42_000L);
+        InOrder queued = inOrder(taskRepository);
+        queued.verify(taskRepository).markQueued(first.getId(), 41_000L, null);
+        queued.verify(taskRepository).markQueued(second.getId(), 41_000L, null);
+        queued.verify(taskRepository).markQueued(third.getId(), 42_000L, null);
     }
 
     @Test
@@ -228,7 +234,7 @@ class PriorityCalculatorServiceTest {
 
         service.run();
 
-        assertThat(task.getPriority()).isEqualTo(143L);
+        verify(taskRepository).markQueued(task.getId(), 143L, null);
     }
 
     private void stubVirtualTime() {

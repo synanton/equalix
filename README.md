@@ -203,6 +203,7 @@ Below is the **core configuration** block. Any property can be overridden with a
 app:
   scheduling:
     enabled: true                          # Scheduled jobs (dispatchers, watchdog, recovery)
+    distributed-locks: true                # ShedLock coordination; false = single instance, no lock traffic
 
   security:
     api-key: ${EQUALIX_API_KEY:changeme}   # Required for all /api and /actuator/prometheus

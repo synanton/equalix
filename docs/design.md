@@ -232,14 +232,15 @@ tag. Starting new work at `max(virtual_finish, V)` stops an idle key from bankin
 updates are monotonic `GREATEST(...)` upserts, so concurrent instances and restarts are safe.
 
 Sequential tasks receive an additional sequence-based boost and a large penalty if the fairness
-key is currently blocked (see §14). Each task is persisted with `status=QUEUED` and the new
-priority in a single `save`.
+key is currently blocked (see §14). Each task transitions `RECEIVED → QUEUED` with its priority
+and finish tag via one targeted `UPDATE` (`markQueued`) — no entity round-trip (see §10.5).
 
 ### 5.6 Dispatcher
 
 Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@SchedulerLock`.
 
-1. Promote any starved tasks (`age > maxQueuedTimeMs`) by setting their priority to 0.
+1. Promote any starved tasks (`age > maxQueuedTimeMs`) with one bulk `UPDATE`
+   (`priority = 0`, bypassing quota per §9.3; see §10.5).
 2. Compute `freeSlots = maxTasksInProcess − globalInFlight`. When adaptive RPS is enabled,
    also cap `freeSlots` by `ceil(currentRps × intervalSeconds)`.
 3. Query dispatchable tasks:
@@ -252,7 +253,8 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
       AND t.is_sequential = false
       AND (:maxPerClient IS NULL
            OR cc.in_flight_count < :maxPerClient
-           OR cc.in_flight_count IS NULL)
+           OR cc.in_flight_count IS NULL
+           OR t.priority <= 0)
     ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
     LIMIT :freeSlots
     FOR UPDATE OF t SKIP LOCKED
@@ -263,8 +265,11 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
    ordered by `created_at, id`. It then keeps the best `freeSlots` by `priority − A(now − created_at)`,
    tie-broken by `(created_at, id)`. Non-linear aging changes the relative order over time, so it
    cannot be stored in `priority`.
-4. For each selected task: set `status=DISPATCHED`, increment CMS (+1), increment `client_counts`,
-   call `RemoteExecutorPort.send()`.
+4. Mark all selected tasks `DISPATCHED` with one bulk `UPDATE` (the rows are locked by
+   this transaction; version is bumped inline so concurrent holders still fail fast).
+   Then, per task: increment CMS (+1) and call `RemoteExecutorPort.send()`. `client_counts`
+   increments are aggregated per fairness key — one `UPDATE … + delta` per key, not per task.
+   See §10.5.
 5. Advance `T_k` of each dispatched key to its highest dispatched finish tag. Advance the system
    virtual time `V` to the highest aged position `tag − A(W)`, so a task promoted by aging does not
    drag `V` ahead of the backlog. The sequential dispatcher does the same without aging.
@@ -275,9 +280,12 @@ Sequential tasks are dispatched by a separate `SequentialDispatcherService` (see
 
 `HttpRemoteExecutorAdapter` posts a binary envelope
 (`[16 bytes UUID][4 bytes len][payload][4 bytes len][previousResult]`) to
-`{base-url}/tasks/{id}/execute`. HTTP 2xx marks the task `COMMITTED`. Errors are logged
-and do not throw; `TaskTimeoutService` later marks stuck in-flight tasks `TIMEOUT` and
-releases CMS/`client_counts` slots. The remote system reports completion via a webhook.
+`{base-url}/tasks/{id}/execute`. HTTP 2xx marks the task `COMMITTED` via one guarded
+`UPDATE` (`DispatchAckService`): already-moved tasks match zero rows and are ignored, so the
+asynchronous ack can never overwrite progress. Errors are logged
+and do not throw; `TaskTimeoutService` later marks stuck in-flight tasks `TIMEOUT` with one
+guarded `UPDATE` per task (a concurrent completion wins — the sweep skips instead of
+clobbering) and releases CMS/`client_counts` slots. The remote system reports completion via a webhook.
 
 ### 5.8 Completion handler
 
@@ -286,7 +294,10 @@ of terminal tasks are ignored. Completing a non-in-flight task is rejected.
 
 For non-sequential tasks (`CompletionHandlerService`):
 
-1. Set `status=SUCCEEDED|FAILED`, `completedAt`, `result`, `lastError`, `updatedAt`.
+1. One atomic `UPDATE` sets `status=SUCCEEDED|FAILED`, `completedAt`, `result`, `lastError`
+   (status guard and version check inline — no load-modify-save). Zero matched rows means a
+   concurrent transition: the row is re-read, terminal rows are ignored as duplicates,
+   otherwise an optimistic-locking failure propagates, as the old merge version check did.
 2. Decrement CMS (−1).
 3. Decrement `client_counts` (with `GREATEST(0, …)`).
 4. Notify `PerformanceMonitorPort.recordCompletion(...)` which drives the Adaptive RPS controller.
@@ -538,7 +549,9 @@ measurements.
 
 - **Scheduled jobs** - all use `@SchedulerLock` (ShedLock over JDBC) to prevent duplicate runs
   across instances. This includes priority calc, dispatcher, watchdog, sequential dispatcher,
-  client-block recovery, and result-passthrough recovery.
+  client-block recovery, and result-passthrough recovery. Single-instance deployments set
+  `app.scheduling.distributed-locks: false`, which installs a no-op lock provider and skips
+  all lock traffic (~140 statements/s at default cadences); never disable it with 2+ instances.
 - **Dispatcher query** - `SELECT ... FOR UPDATE SKIP LOCKED` safely partitions candidate tasks
   under concurrent dispatchers.
 - **CMS (local)** - `synchronized` on the sketch instance, sufficient for the update pattern
@@ -548,7 +561,52 @@ measurements.
   single-threaded execution eliminates application-side locking.
 - **`client_counts`** - atomic `UPDATE ... SET in_flight_count = GREATEST(0, in_flight_count + delta)`.
 - **Optimistic locking** - `@Version` on `TaskEntity` prevents lost updates on concurrent
-  status transitions.
+  status transitions. The bulk/targeted UPDATEs (§10.5) bump `version` inline and carry the
+  status guard in the `WHERE` clause, so the guarantee holds without entity round-trips.
+
+### 10.5 DB write budget (O1–O6)
+
+Status transitions never load-modify-save. Every write below is one statement (bulk where
+the tick already holds the rows); the version/status guards that merges used to enforce
+run inside the `UPDATE`:
+
+| Transition | Statement |
+|---|---|
+| Ingest | `INSERT` via `EntityManager.persist` (new rows only; merge costs a SELECT-miss) |
+| Priority calc | `UPDATE … SET status='QUEUED', priority, virtual_finish WHERE id AND status='RECEIVED'` per task |
+| Dispatch | one bulk `UPDATE … SET status='DISPATCHED' WHERE id IN (…)` per tick + one `client_counts + delta` per key |
+| Executor ack | guarded `UPDATE … SET status='COMMITTED' WHERE id AND status='DISPATCHED'` |
+| Completion / timeout / block-recovery | guarded `UPDATE` with status + version checks; zero rows → re-read (terminal = duplicate, else conflict) |
+| Starvation promotion | one bulk `UPDATE … SET priority=0 WHERE id IN (SELECT … LIMIT n)` per tick |
+| Sequence-state bootstrap | `INSERT … ON CONFLICT DO NOTHING … RETURNING *` (one round-trip, new or existing) |
+
+Measured on `DbLoadBenchmarkTest` (400 tasks, single tenant, Testcontainers PostgreSQL —
+exact statement counts via a counting DataSource proxy, wall-clock ranges over repeated
+runs on shared hardware):
+
+| Phase (400 tasks) | Before (stmts) | After (stmts) | Before (wall) | After (wall) |
+|---|---|---|---|---|
+| Ingest | 800 (merge-miss SELECT + INSERT) | 400 (persist) | 440–530 ms | 400–410 ms |
+| Priority calc | 804 | 804 | 580–620 ms | 670–940 ms, host noise — see below |
+| Dispatch | 805 | 7 | 555–565 ms | 36–46 ms |
+| Executor ack | 800 | 400 | 249–281 ms | 90–170 ms |
+| Completion | 1600 | 1200 | 423–499 ms | 269–437 ms |
+| **Total** | **4809** | **2811 (−42%)** | **~2.3–2.4 s** | **~1.7–2.0 s (~−28%)** |
+
+Two measurement corrections worth recording:
+
+- Merge is only expensive **across transactions**. Inside one transaction the entities are
+  managed, so merge degrades to a plain UPDATE — the calc path was already 2 statements/task
+  and stays 2 (narrower WAL, same round-trips). The SELECT-miss hits exactly two places:
+  ingest of new rows (fixed by `persist`) and cross-transaction completion (fixed by folding
+  the guard into the UPDATE). The pre-patch analysis assumed worse; the counter proved it.
+- Calc wall-clock is inconclusive at this sample size (±30% host noise swamps a zero-count
+  delta). Dispatch (−99% statements, ~13× wall) and ack (−50%) are far outside noise; the
+  totals agree with the counts.
+
+Deliberately unchanged: `reserveFinishTag` (one cheap PK upsert per task on a tiny table;
+batching would break consecutive tag assignment), `totalInFlight` (one `SUM` over the tiny
+`client_counts`), watchdog GROUP BY (every 5 min, partial-indexed), CMS local path (no DB).
 
 ---
 
@@ -748,6 +806,10 @@ carries the same trigger; keep the two in sync.
   `src/test/java/org/synanton/equalix/integration/`.
 - **Controller tests** - `@WebMvcTest` slices for exception-mapping and validation behaviour.
   See `GlobalExceptionHandlerTest`.
+- **DB-load benchmark** - `DbLoadBenchmarkTest` drives 400 tasks through the full lifecycle
+  (ingest → calc → dispatch → ack → complete) against Testcontainers PostgreSQL and reports
+  wall-clock plus exact per-phase statement counts (via a counting-DataSource proxy).
+  It pins the §10.5 write budget: assertions cover lifecycle correctness only, never timings.
 
 ---
 

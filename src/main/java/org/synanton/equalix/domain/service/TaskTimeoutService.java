@@ -49,10 +49,15 @@ public class TaskTimeoutService {
         if (!task.getStatus().isInFlight()) {
             return;
         }
-        task.setStatus(TaskStatus.TIMEOUT)
-            .setLastError("Exceeded task timeout of " + queueProperties.getTaskTimeoutMs() + "ms")
-            .setCompletedAt(now);
-        taskRepository.save(task);
+        // Targeted UPDATE with in-statement guards (no merge round-trip). A concurrent
+        // terminal transition yields false: skip the slot release instead of clobbering
+        // it — strictly more tolerant than the old merge, which aborted the batch.
+        boolean transitioned = taskRepository.markTimeout(
+            task.getId(), task.getVersion(),
+            "Exceeded task timeout of " + queueProperties.getTaskTimeoutMs() + "ms", now);
+        if (!transitioned) {
+            return;
+        }
         cms.add(task.getFairnessKey(), -1);
         clientCounts.decrementInFlight(task.getFairnessKey());
 

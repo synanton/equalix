@@ -5,6 +5,7 @@ import javax.sql.DataSource;
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,6 +15,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class ShedLockConfig {
 
     @Bean
+    @ConditionalOnProperty(prefix = "app.scheduling", name = "distributed-locks",
+        havingValue = "true", matchIfMissing = true)
     public LockProvider lockProvider(DataSource dataSource) {
         return new JdbcTemplateLockProvider(
             JdbcTemplateLockProvider.Configuration.builder()
@@ -21,6 +24,12 @@ public class ShedLockConfig {
                 .usingDbTime()
                 .build()
         );
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.scheduling", name = "distributed-locks", havingValue = "false")
+    public LockProvider noOpLockProvider() {
+        return new NoOpLockProvider();
     }
 
     /** Minimum hold time prevents another instance from acquiring the lock immediately after release. */

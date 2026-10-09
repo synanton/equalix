@@ -1,14 +1,17 @@
 package org.synanton.equalix.domain.service;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,18 +52,12 @@ class CompletionHandlerServiceTest {
     void shouldMarkTaskSucceededAndDecrementCounts() {
         Task task = buildDispatched();
         byte[] result = new byte[]{9};
+        when(taskRepository.completeTask(task.getId(), 0L, TaskStatus.SUCCEEDED, result, null, FIXED_NOW))
+            .thenReturn(true);
 
         service.handle(task, true, result, null);
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.SUCCEEDED);
-        assertThat(task.getResult()).isSameAs(result);
-        assertThat(task.getLastError()).isNull();
-        assertThat(task.getCompletedAt()).isEqualTo(FIXED_NOW);
-        // DB-clock unification: the service no longer stamps updated_at;
-        // the dispatch-time value passes through untouched.
-        assertThat(task.getUpdatedAt()).isEqualTo(DISPATCH_AT);
-
-        verify(taskRepository).save(task);
+        verify(taskRepository).completeTask(task.getId(), 0L, TaskStatus.SUCCEEDED, result, null, FIXED_NOW);
         verify(cms).add("k", -1L);
         verify(clientCounts).decrementInFlight("k");
         verify(performanceMonitor).recordCompletion(eq("k"), eq(250L), eq(true));
@@ -69,12 +66,13 @@ class CompletionHandlerServiceTest {
     @Test
     void shouldMarkTaskFailedAndRecordError() {
         Task task = buildDispatched();
+        when(taskRepository.completeTask(task.getId(), 0L, TaskStatus.FAILED, null, "downstream 500", FIXED_NOW))
+            .thenReturn(true);
 
         service.handle(task, false, null, "downstream 500");
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.FAILED);
-        assertThat(task.getLastError()).isEqualTo("downstream 500");
-        assertThat(task.getResult()).isNull();
+        verify(taskRepository).completeTask(task.getId(), 0L, TaskStatus.FAILED, null, "downstream 500",
+            FIXED_NOW);
         verify(performanceMonitor).recordCompletion(eq("k"), eq(250L), eq(false));
         verify(cms).add("k", -1L);
         verify(clientCounts).decrementInFlight("k");
@@ -83,6 +81,8 @@ class CompletionHandlerServiceTest {
     @Test
     void shouldRecordZeroDurationWhenUpdatedAtMissing() {
         Task task = buildDispatched().setUpdatedAt(null);
+        when(taskRepository.completeTask(eq(task.getId()), anyLong(), any(), any(), any(), any()))
+            .thenReturn(true);
 
         service.handle(task, true, null, null);
 
@@ -96,6 +96,32 @@ class CompletionHandlerServiceTest {
         service.handle(task, true, null, null);
 
         verifyNoInteractions(taskRepository, cms, clientCounts, performanceMonitor);
+    }
+
+    @Test
+    void shouldIgnoreCompletionLostToConcurrentTerminalTransition() {
+        Task task = buildDispatched();
+        when(taskRepository.completeTask(eq(task.getId()), anyLong(), any(), any(), any(), any()))
+            .thenReturn(false);
+        when(taskRepository.findById(task.getId()))
+            .thenReturn(Optional.of(buildDispatched().setStatus(TaskStatus.SUCCEEDED)));
+
+        service.handle(task, true, null, null);
+
+        verifyNoInteractions(cms, clientCounts, performanceMonitor);
+    }
+
+    @Test
+    void shouldFailFastOnConcurrentModificationOfLiveTask() {
+        Task task = buildDispatched();
+        when(taskRepository.completeTask(eq(task.getId()), anyLong(), any(), any(), any(), any()))
+            .thenReturn(false);
+        when(taskRepository.findById(task.getId()))
+            .thenReturn(Optional.of(buildDispatched()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.handle(task, true, null, null))
+            .isInstanceOf(jakarta.persistence.OptimisticLockException.class);
+        verifyNoInteractions(cms, clientCounts, performanceMonitor);
     }
 
     @Test
