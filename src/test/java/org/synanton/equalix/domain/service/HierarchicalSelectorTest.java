@@ -70,6 +70,18 @@ class HierarchicalSelectorTest {
     }
 
     @Test
+    void shouldServePromotedTasksBeyondQuota() {
+        // At quota (capacity 0) but holding 2 promoted tasks: both still serve.
+        List<QueuedLeaf> leaves = List.of(new QueuedLeaf("acme/a", 5, 2, 1.0, 2), leaf("acme/b", 1));
+
+        HierarchicalSelector.Plan plan = HierarchicalSelector.plan(leaves, hierarchy, Map.of(), NO_IN_FLIGHT, 0,
+            QUANTUM, 10, 2);
+
+        assertThat(plan.tasksPerLeaf().get("acme/a")).isEqualTo(2);
+        assertThat(plan.pickOrder()).startsWith("acme/a", "acme/a");
+    }
+
+    @Test
     void shouldPreferNodeWithLessInFlightPressure() {
         List<QueuedLeaf> leaves = List.of(leaf("acme/busy", 10), leaf("acme/idle", 10));
         ToLongFunction<String> inFlight = key -> key.equals("acme/busy") ? 5L : 0L;
