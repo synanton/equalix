@@ -1,13 +1,10 @@
 package org.synanton.equalix.domain.service;
 
-import java.time.Clock;
-import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.synanton.equalix.domain.model.TaskStatus;
 import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 
 /** Records that the remote executor accepted a dispatched task. */
@@ -17,18 +14,14 @@ import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 public class DispatchAckService {
 
     private final TaskRepositoryPort taskRepository;
-    private final Clock clock;
 
     @Transactional
     public void markCommitted(UUID taskId) {
-        taskRepository.findById(taskId).ifPresent(task -> {
-            if (task.getStatus() != TaskStatus.DISPATCHED) {
-                return;
-            }
-            Instant now = Instant.now(clock);
-            task.setStatus(TaskStatus.COMMITTED);
-            taskRepository.save(task);
+        // Single guarded UPDATE (no load-modify-save round-trip). A zero rowcount means the
+        // task already moved on (completed, timed out, never dispatched) — the async ack
+        // must never overwrite progress, so it is silently ignored, as before.
+        if (taskRepository.markCommitted(taskId)) {
             log.debug("Task {} marked COMMITTED", taskId);
-        });
+        }
     }
 }

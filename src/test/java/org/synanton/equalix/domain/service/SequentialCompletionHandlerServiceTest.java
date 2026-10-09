@@ -2,6 +2,8 @@ package org.synanton.equalix.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -61,14 +63,16 @@ class SequentialCompletionHandlerServiceTest {
             .setFairnessKey("k").setLastCompletedSequence(2L)
             .setCurrentExecutingTaskId(task.getId()).setBlocked(false);
         when(sequenceStateRepository.findOrCreate("k")).thenReturn(state);
+        when(taskRepository.completeTask(task.getId(), 0L, TaskStatus.SUCCEEDED, new byte[]{7}, null,
+            FIXED_NOW)).thenReturn(true);
 
         service.handle(task, true, new byte[]{7}, null);
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.SUCCEEDED);
         assertThat(state.getLastCompletedSequence()).isEqualTo(3L);
         assertThat(state.getCurrentExecutingTaskId()).isNull();
 
-        verify(taskRepository).save(task);
+        verify(taskRepository).completeTask(task.getId(), 0L, TaskStatus.SUCCEEDED, new byte[]{7}, null,
+            FIXED_NOW);
         verify(sequenceStateRepository).save(state);
         verify(cms).add("k", -1L);
         verify(clientCounts).decrementInFlight("k");
@@ -83,11 +87,11 @@ class SequentialCompletionHandlerServiceTest {
             .setFairnessKey("k").setLastCompletedSequence(2L)
             .setCurrentExecutingTaskId(task.getId());
         when(sequenceStateRepository.findOrCreate("k")).thenReturn(state);
+        when(taskRepository.completeTask(task.getId(), 0L, TaskStatus.FAILED, null, "boom", FIXED_NOW))
+            .thenReturn(true);
 
         service.handle(task, false, null, "boom");
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.FAILED);
-        assertThat(task.getLastError()).isEqualTo("boom");
         assertThat(state.isBlocked()).isTrue();
         assertThat(state.getBlockedAt()).isEqualTo(FIXED_NOW);
         assertThat(state.getLastCompletedSequence()).isEqualTo(2L);
@@ -100,6 +104,8 @@ class SequentialCompletionHandlerServiceTest {
         ClientSequenceState state = new ClientSequenceState()
             .setFairnessKey("k").setLastCompletedSequence(7L);
         when(sequenceStateRepository.findOrCreate("k")).thenReturn(state);
+        when(taskRepository.completeTask(eq(task.getId()), anyLong(), eq(TaskStatus.SUCCEEDED), any(),
+            any(), eq(FIXED_NOW))).thenReturn(true);
 
         service.handle(task, true, null, null);
 

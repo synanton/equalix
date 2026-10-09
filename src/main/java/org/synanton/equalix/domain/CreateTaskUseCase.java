@@ -7,6 +7,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.synanton.equalix.config.properties.QueueProperties;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
@@ -25,6 +26,10 @@ public class CreateTaskUseCase implements TaskIngestionPort {
     private final FairnessHierarchy fairnessHierarchy;
     private final Clock clock;
 
+    // One transaction for task insert + sequence-state bootstrap (a crash between the
+    // two used to leave sequential tasks without state); also required by the
+    // persist-based insert path.
+    @Transactional
     @Override
     public Task createTask(
         String fairnessKey,
@@ -70,7 +75,7 @@ public class CreateTaskUseCase implements TaskIngestionPort {
             .setDependsOnTaskId(dependsOnTaskId)
             .setRequiresPreviousResult(requiresPreviousResult);
 
-        Task saved = taskRepository.save(task);
+        Task saved = taskRepository.insert(task);
         if (isSequential) {
             sequenceStateRepository.findOrCreate(fairnessKey);
         }

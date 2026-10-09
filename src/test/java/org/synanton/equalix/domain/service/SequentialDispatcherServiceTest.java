@@ -60,9 +60,11 @@ class SequentialDispatcherServiceTest {
         when(sequenceStateRepository.findReadyClients()).thenReturn(List.of(state));
         when(taskRepository.findNextSequentialTask("clientA", 1L, TaskStatus.QUEUED))
             .thenReturn(Optional.of(nextTask));
+        when(taskRepository.markDispatched(nextTask.getId(), null)).thenReturn(true);
 
         service.dispatch();
 
+        verify(taskRepository).markDispatched(nextTask.getId(), null);
         verify(remoteExecutor).send(nextTask.getId(), nextTask.getPayload(), null);
         verify(cms).add("clientA", 1L);
         verify(clientCounts).incrementInFlight("clientA");
@@ -83,10 +85,27 @@ class SequentialDispatcherServiceTest {
         when(taskRepository.findNextSequentialTask("clientA", 1L, TaskStatus.QUEUED))
             .thenReturn(Optional.of(nextTask));
         when(taskRepository.findById(predecessorId)).thenReturn(Optional.of(predecessorTask));
+        when(taskRepository.markDispatched(nextTask.getId(), previousResult)).thenReturn(true);
 
         service.dispatch();
 
+        verify(taskRepository).markDispatched(nextTask.getId(), previousResult);
         verify(remoteExecutor).send(nextTask.getId(), nextTask.getPayload(), previousResult);
+    }
+
+    @Test
+    void shouldSkipDispatchWhenTaskMovedConcurrently() {
+        ClientSequenceState state = readyState("clientA", 0);
+        Task nextTask = buildSequentialTask("clientA", 1L);
+
+        when(sequenceStateRepository.findReadyClients()).thenReturn(List.of(state));
+        when(taskRepository.findNextSequentialTask("clientA", 1L, TaskStatus.QUEUED))
+            .thenReturn(Optional.of(nextTask));
+        when(taskRepository.markDispatched(nextTask.getId(), null)).thenReturn(false);
+
+        service.dispatch();
+
+        verifyNoInteractions(remoteExecutor, cms, clientCounts);
     }
 
     @Test

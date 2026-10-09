@@ -20,10 +20,17 @@ Set `EQUALIX_API_KEY` in every non-local environment. Datasource credentials com
 app:
   scheduling:
     enabled: true   # Runs the priority calculator, dispatchers, watchdog and recovery jobs
+    distributed-locks: true   # JDBC ShedLock coordination; false skips all lock traffic (single instance only)
 ```
 
 Set it to `false` for a node that should only ingest and receive completions. Integration tests also set it
 to `false` and drive the jobs directly.
+
+`distributed-locks: false` installs a no-op lock provider: every `@SchedulerLock`
+reports held without touching the `shedlock` table. At default cadences that removes
+~140 lock statements/s. Only correct with exactly one scheduler instance — with two or
+more, ticks run concurrently on every instance (duplicate dispatches are contained by
+`SKIP LOCKED` for task rows, but CMS counts and virtual-time charges double-apply).
 
 ## Root
 

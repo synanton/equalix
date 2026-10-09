@@ -2,6 +2,7 @@ package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
@@ -43,12 +44,20 @@ public class CompletionHandlerService {
 
         TaskStatus finalStatus = success ? TaskStatus.SUCCEEDED : TaskStatus.FAILED;
 
-        task.setStatus(finalStatus)
-            .setResult(result)
-            .setLastError(error)
-            .setCompletedAt(now);
-
-        taskRepository.save(task);
+        // Single atomic UPDATE (status guard + version check inline) instead of
+        // load-modify-save. A zero rowcount means the row moved concurrently: re-read
+        // to distinguish a duplicate completion of a terminal task (ignore, as before)
+        // from a genuine conflict (fail fast, as the merge version check did).
+        boolean transitioned = taskRepository.completeTask(
+            task.getId(), task.getVersion(), finalStatus, result, error, now);
+        if (!transitioned) {
+            Task current = taskRepository.findById(task.getId()).orElse(null);
+            if (current != null && current.getStatus().isTerminal()) {
+                log.debug("Ignoring duplicate completion for terminal task {}", task.getId());
+                return;
+            }
+            throw new OptimisticLockException("Concurrent modification of task " + task.getId());
+        }
         cms.add(task.getFairnessKey(), -1);
         clientCounts.decrementInFlight(task.getFairnessKey());
         performanceMonitor.recordCompletion(task.getFairnessKey(), durationMs, success);

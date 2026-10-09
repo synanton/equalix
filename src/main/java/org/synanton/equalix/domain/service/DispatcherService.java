@@ -14,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.synanton.equalix.config.properties.AdaptiveRpsProperties;
 import org.synanton.equalix.config.properties.QueueProperties;
 import org.synanton.equalix.domain.model.Task;
-import org.synanton.equalix.domain.model.TaskStatus;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientCountsRepositoryPort;
 import org.synanton.equalix.domain.port.out.RemoteExecutorPort;
@@ -75,13 +74,20 @@ public class DispatcherService {
             return;
         }
 
+        // Single bulk UPDATE for the whole tick (the rows are locked by this transaction),
+        // then per-task counts/CMS/send. Rowcount mismatch is unexpected under the locks;
+        // warn rather than silently dispatching tasks whose transition did not persist.
+        int marked = taskRepository.bulkMarkDispatched(tasks.stream().map(Task::getId).toList());
+        if (marked != tasks.size()) {
+            log.warn("Dispatch transition persisted for {}/{} locked tasks", marked, tasks.size());
+        }
+        Map<String, Integer> increments = new LinkedHashMap<>();
         for (Task task : tasks) {
-            task.setStatus(TaskStatus.DISPATCHED);
-            taskRepository.save(task);
+            increments.merge(task.getFairnessKey(), 1, Integer::sum);
             cms.add(task.getFairnessKey(), 1);
-            clientCounts.incrementInFlight(task.getFairnessKey());
             remoteExecutor.send(task.getId(), task.getPayload(), null);
         }
+        increments.forEach(clientCounts::incrementInFlight);
         boolean aged = hierarchicalSelection == null && agingService.isEnabled();
         virtualTimeService.recordDispatch(tasks, task -> aged ? agingService.credit(task, now) : 0.0);
         if (hierarchicalSelection != null) {
@@ -107,19 +113,12 @@ public class DispatcherService {
     }
 
     private void promoteStarvedTasks() {
-        List<Task> starved = taskRepository.findStarvedTasks(
+        // Single bulk UPDATE (no per-task load-modify-save); the rowcount feeds the log line.
+        int promoted = taskRepository.bulkPromoteStarvedTasks(
             queueProperties.getMaxQueuedTimeMs(),
             queueProperties.getWorkerPollSize());
-
-        if (starved.isEmpty()) {
-            return;
+        if (promoted > 0) {
+            log.warn("Promoted {} starved tasks to front of queue", promoted);
         }
-
-        for (Task task : starved) {
-            // Boost priority to zero to force this task to the front regardless of quota
-            task.setPriority(0L);
-            taskRepository.save(task);
-        }
-        log.warn("Promoted {} starved tasks to front of queue", starved.size());
     }
 }

@@ -9,6 +9,12 @@ public interface ClientCountsRepositoryPort {
 
     void incrementInFlight(String fairnessKey);
 
+    /**
+     * Batched increment for dispatch ticks: one statement per fairness key instead of
+     * one per task. Aggregating per tick turns N task dispatches into K key writes.
+     */
+    void incrementInFlight(String fairnessKey, int delta);
+
     /** Decrements in-flight count, flooring at zero to avoid negative values. */
     void decrementInFlight(String fairnessKey);
 

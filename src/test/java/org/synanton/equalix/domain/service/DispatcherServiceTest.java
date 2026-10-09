@@ -61,7 +61,7 @@ class DispatcherServiceTest {
             Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(8L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         List<Task> tasks = List.of(buildQueuedTask("clientA"), buildQueuedTask("clientA"));
         when(taskRepository.findAndLockDispatchable(2, null)).thenReturn(tasks);
 
@@ -69,7 +69,10 @@ class DispatcherServiceTest {
 
         verify(remoteExecutor, times(2)).send(any(), any(), isNull());
         verify(cms, times(2)).add(eq("clientA"), eq(1L));
-        verify(clientCounts, times(2)).incrementInFlight("clientA");
+        verify(taskRepository).bulkMarkDispatched(
+            List.of(tasks.get(0).getId(), tasks.get(1).getId()));
+        verify(clientCounts).incrementInFlight("clientA", 2);
+        verify(clientCounts, never()).incrementInFlight(anyString());
         verify(virtualTimeService).recordDispatch(eq(tasks), any());
         verify(taskRepository, never()).findAndLockOldestDispatchable(anyInt(), any());
     }
@@ -82,10 +85,10 @@ class DispatcherServiceTest {
             Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(5L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
 
         service.dispatch();
 
+        verify(taskRepository).bulkPromoteStarvedTasks(60_000L, 50);
         verifyNoInteractions(remoteExecutor, virtualTimeService);
         verify(taskRepository, never()).findAndLockDispatchable(anyInt(), any());
     }
@@ -98,18 +101,17 @@ class DispatcherServiceTest {
             Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         Task task = buildQueuedTask("tenantX");
         when(taskRepository.findAndLockDispatchable(10, 2)).thenReturn(List.of(task));
+        when(taskRepository.bulkMarkDispatched(List.of(task.getId()))).thenReturn(1);
 
         service.dispatch();
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.DISPATCHED);
-        // DB-clock unification: dispatch leaves a pre-existing stamp untouched.
-        assertThat(task.getUpdatedAt()).isEqualTo(FIXED_NOW.minusMillis(100));
-        verify(taskRepository).save(task);
+        verify(taskRepository).bulkMarkDispatched(List.of(task.getId()));
         verify(cms).add("tenantX", 1L);
-        verify(clientCounts).incrementInFlight("tenantX");
+        verify(clientCounts).incrementInFlight("tenantX", 1);
+        verify(clientCounts, never()).incrementInFlight(anyString());
         verify(remoteExecutor).send(task.getId(), task.getPayload(), null);
     }
 
@@ -126,7 +128,7 @@ class DispatcherServiceTest {
         Task oldBack = buildQueuedTask("clientB").setPriority(9_000L)
             .setCreatedAt(FIXED_NOW.minusSeconds(85));                                      // effective 500
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(front, second));
         when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(oldBack, front));
 
@@ -149,7 +151,7 @@ class DispatcherServiceTest {
 
         Task aged = buildQueuedTask("clientA").setPriority(9_000L).setCreatedAt(FIXED_NOW.minusSeconds(30));
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(aged));
         when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(aged));
 
@@ -172,7 +174,7 @@ class DispatcherServiceTest {
         HierarchicalDispatchPlanner.Selection selection =
             new HierarchicalDispatchPlanner.Selection(List.of(first, second), null);
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(hierarchicalDispatchPlanner.select(3, null)).thenReturn(selection);
 
         service.dispatch();

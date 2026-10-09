@@ -67,6 +67,8 @@ class ClientBlockRecoveryServiceTest {
 
         when(sequenceStateRepository.findBlockedClients()).thenReturn(List.of(blocked));
         when(taskRepository.findById(executingTaskId)).thenReturn(Optional.of(executingTask));
+        when(taskRepository.completeTask(eq(executingTaskId), anyLong(), eq(TaskStatus.FAILED), isNull(),
+            contains("Force-unblocked"), eq(FIXED_NOW))).thenReturn(true);
 
         service.recover();
 
@@ -77,7 +79,8 @@ class ClientBlockRecoveryServiceTest {
         assertThat(result.isBlocked()).isFalse();
         assertThat(result.getCurrentExecutingTaskId()).isNull();
         assertThat(result.getLastCompletedSequence()).isEqualTo(4L);
-        verify(taskRepository).save(argThat(task -> task.getStatus() == TaskStatus.FAILED));
+        verify(taskRepository).completeTask(eq(executingTaskId), eq(0L), eq(TaskStatus.FAILED), isNull(),
+            contains("Force-unblocked"), eq(FIXED_NOW));
         verify(cms).add("clientA", -1L);
         verify(clientCounts).decrementInFlight("clientA");
     }

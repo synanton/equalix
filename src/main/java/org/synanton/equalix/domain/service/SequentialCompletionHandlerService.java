@@ -2,6 +2,7 @@ package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
@@ -47,11 +48,16 @@ public class SequentialCompletionHandlerService {
 
         TaskStatus finalStatus = success ? TaskStatus.SUCCEEDED : TaskStatus.FAILED;
 
-        task.setStatus(finalStatus)
-            .setResult(result)
-            .setLastError(error)
-            .setCompletedAt(now);
-        taskRepository.save(task);
+        boolean transitioned = taskRepository.completeTask(
+            task.getId(), task.getVersion(), finalStatus, result, error, now);
+        if (!transitioned) {
+            Task current = taskRepository.findById(task.getId()).orElse(null);
+            if (current != null && current.getStatus().isTerminal()) {
+                log.debug("Ignoring duplicate completion for terminal task {}", task.getId());
+                return;
+            }
+            throw new OptimisticLockException("Concurrent modification of task " + task.getId());
+        }
 
         ClientSequenceState state = sequenceStateRepository.findOrCreate(task.getFairnessKey());
         if (success) {

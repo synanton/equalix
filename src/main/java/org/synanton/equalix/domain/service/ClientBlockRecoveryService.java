@@ -71,10 +71,14 @@ public class ClientBlockRecoveryService {
         if (!task.getStatus().isInFlight()) {
             return;
         }
-        task.setStatus(TaskStatus.FAILED)
-            .setLastError("Force-unblocked by ClientBlockRecoveryService after timeout")
-            .setCompletedAt(now);
-        taskRepository.save(task);
+        // Atomic terminal UPDATE (guards inline); a concurrent transition yields false
+        // and the slot release is skipped rather than double-applied.
+        boolean transitioned = taskRepository.completeTask(
+            task.getId(), task.getVersion(), TaskStatus.FAILED, null,
+            "Force-unblocked by ClientBlockRecoveryService after timeout", now);
+        if (!transitioned) {
+            return;
+        }
         cms.add(task.getFairnessKey(), -1);
         clientCounts.decrementInFlight(task.getFairnessKey());
     }

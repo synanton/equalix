@@ -1,7 +1,6 @@
 package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -65,9 +64,12 @@ public class SequentialDispatcherService {
             nextTask.setPreviousResult(previousResult);
         }
 
-        Instant now = Instant.now(clock);
-        nextTask.setStatus(TaskStatus.DISPATCHED);
-        taskRepository.save(nextTask);
+        // Targeted UPDATE (no merge round-trip); a concurrent transition yields false
+        // and the tick is skipped — the next tick reconsiders the key.
+        if (!taskRepository.markDispatched(nextTask.getId(), nextTask.getPreviousResult())) {
+            log.debug("Sequential task {} moved concurrently, skipping dispatch", nextTask.getId());
+            return;
+        }
 
         state.setCurrentExecutingTaskId(nextTask.getId())
             .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L);

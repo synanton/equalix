@@ -16,7 +16,12 @@ public class ClientCountsRepositoryAdapter implements ClientCountsRepositoryPort
 
     @Override
     public void incrementInFlight(String fairnessKey) {
-        jpaRepository.incrementInFlight(fairnessKey);
+        incrementInFlight(fairnessKey, 1);
+    }
+
+    @Override
+    public void incrementInFlight(String fairnessKey, int delta) {
+        jpaRepository.incrementInFlight(fairnessKey, delta);
     }
 
     @Override

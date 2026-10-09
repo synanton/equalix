@@ -1,5 +1,6 @@
 package org.synanton.equalix.adapter.out.database;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -123,6 +124,82 @@ public interface TaskJpaRepository extends JpaRepository<TaskEntity, UUID> {
     @Modifying
     @Query("UPDATE TaskEntity t SET t.status = :newStatus WHERE t.id IN :ids")
     int updateStatusBatch(@Param("ids") List<UUID> ids, @Param("newStatus") TaskStatus newStatus);
+
+    // Write-path optimizations (O1/O2): targeted UPDATEs replace load-modify-save
+    // merge round-trips (each merge costs a SELECT plus a full-row UPDATE). Version is
+    // bumped inline so concurrent holders still fail fast on stale state.
+
+    /** Bulk dispatch transition for rows locked by {@link #findAndLockDispatchable}. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = 'DISPATCHED', version = version + 1
+        WHERE id IN :ids AND status = 'QUEUED'
+        """, nativeQuery = true)
+    int bulkMarkDispatched(@Param("ids") List<UUID> ids);
+
+    /** Single dispatch transition, attaching the predecessor result for sequential tasks. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = 'DISPATCHED', previous_result = :previousResult,
+            version = version + 1
+        WHERE id = :id AND status = 'QUEUED'
+        """, nativeQuery = true)
+    int markDispatched(@Param("id") UUID id, @Param("previousResult") byte[] previousResult);
+
+    /** Queueing transition for the priority calculator (status, priority, finish tag). */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = 'QUEUED', priority = :priority, virtual_finish = :virtualFinish,
+            version = version + 1
+        WHERE id = :id AND status = 'RECEIVED'
+        """, nativeQuery = true)
+    int markQueued(@Param("id") UUID id, @Param("priority") long priority,
+        @Param("virtualFinish") Double virtualFinish);
+
+    /** Atomic terminal transition: status guard and version check run in the UPDATE. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = CAST(:status AS task_status), result = :result,
+            last_error = :lastError, completed_at = :completedAt, version = version + 1
+        WHERE id = :id AND status IN ('DISPATCHED', 'COMMITTED') AND version = :version
+        """, nativeQuery = true)
+    int completeTask(@Param("id") UUID id, @Param("version") long version,
+        @Param("status") String status, @Param("result") byte[] result,
+        @Param("lastError") String lastError, @Param("completedAt") Instant completedAt);
+
+    /** Executor-ack transition; silently skips tasks that already moved on. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = 'COMMITTED', version = version + 1
+        WHERE id = :id AND status = 'DISPATCHED'
+        """, nativeQuery = true)
+    int markCommitted(@Param("id") UUID id);
+
+    /** Timeout transition with the same in-UPDATE guards as {@link #completeTask}. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET status = 'TIMEOUT', last_error = :lastError, completed_at = :completedAt,
+            version = version + 1
+        WHERE id = :id AND status IN ('DISPATCHED', 'COMMITTED') AND version = :version
+        """, nativeQuery = true)
+    int markTimeout(@Param("id") UUID id, @Param("version") long version,
+        @Param("lastError") String lastError, @Param("completedAt") Instant completedAt);
+
+    /** Bulk starvation promotion (priority → 0); rows already promoted are untouched. */
+    @Modifying
+    @Query(value = """
+        UPDATE tasks SET priority = 0, version = version + 1
+        WHERE id IN (
+            SELECT id FROM tasks
+            WHERE status = 'QUEUED'
+              AND is_sequential = false
+              AND (priority IS NULL OR priority <> 0)
+              AND created_at < now() - (:olderThanMs || ' milliseconds')::interval
+            ORDER BY created_at ASC
+            LIMIT :limit
+        )
+        """, nativeQuery = true)
+    int bulkPromoteStarvedTasks(@Param("olderThanMs") long olderThanMs, @Param("limit") int limit);
 
     @Query("""
         SELECT t.fairnessKey, COUNT(t)
