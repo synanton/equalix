@@ -376,6 +376,12 @@ Go ([equalix-go](https://github.com/synanton/equalix-go)), and Micronaut
 Startup, footprint and runtime characterization across all three:
 [**Equalix family comparison →**](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md).
 
+Published developer books:
+[Equalix](https://synanton.github.io/equalix/) (this repo),
+[equalix-go](https://synanton.github.io/equalix-go/).
+Three-way differential evidence (all pairs, pinned SHAs, transfer addendum):
+[equalix-go `docs/evidence/threeway/`](https://github.com/synanton/equalix-go/tree/main/docs/evidence/threeway/).
+
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE).
