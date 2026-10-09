@@ -360,6 +360,10 @@ User/Batch Requests → Equalix (fairness) → Resolutor (planning) → Downstre
 
 ------
 
+## Documentation
+
+Developer documentation located in [docs](docs) folder and [synanton.github.io/equalix/](https://synanton.github.io/equalix/)
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
