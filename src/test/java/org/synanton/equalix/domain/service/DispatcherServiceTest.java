@@ -69,8 +69,9 @@ class DispatcherServiceTest {
 
         verify(remoteExecutor, times(2)).send(any(), any(), isNull());
         verify(cms, times(2)).add(eq("clientA"), eq(1L));
+        // Bulk ids go out sorted (deterministic lock order, P1), not in selection order.
         verify(taskRepository).bulkMarkDispatched(
-            List.of(tasks.get(0).getId(), tasks.get(1).getId()));
+            List.of(tasks.get(0).getId(), tasks.get(1).getId()).stream().sorted().toList());
         verify(clientCounts).incrementInFlight("clientA", 2);
         verify(clientCounts, never()).incrementInFlight(anyString());
         verify(virtualTimeService).recordDispatch(eq(tasks), any());

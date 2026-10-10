@@ -196,10 +196,14 @@ class DbLoadBenchmarkTest extends BaseIntegrationTest {
                 })
                 .toList();
             try {
-                pool.invokeAll(ticks);
+                for (java.util.concurrent.Future<Void> tick : pool.invokeAll(ticks)) {
+                    tick.get(2, TimeUnit.MINUTES);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(e);
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                throw new IllegalStateException("dispatch tick failed under contention", e);
             } finally {
                 pool.shutdown();
             }

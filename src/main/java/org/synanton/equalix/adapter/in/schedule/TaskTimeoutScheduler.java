@@ -15,6 +15,6 @@ public class TaskTimeoutScheduler {
     @Scheduled(fixedDelayString = "${app.queue.dispatcher-interval}")
     @SchedulerLock(name = "taskTimeout", lockAtMostFor = "5s", lockAtLeastFor = "25ms")
     public void run() {
-        taskTimeoutService.expireTimedOutTasks();
+        TransientRetry.run("taskTimeout", taskTimeoutService::expireTimedOutTasks);
     }
 }

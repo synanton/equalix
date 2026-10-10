@@ -2,15 +2,19 @@ package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.synanton.equalix.config.properties.AdaptiveRpsProperties;
 import org.synanton.equalix.config.properties.QueueProperties;
 import org.synanton.equalix.domain.model.Task;
@@ -74,24 +78,42 @@ public class DispatcherService {
             return;
         }
 
-        // Single bulk UPDATE for the whole tick (the rows are locked by this transaction),
-        // then per-task counts/CMS/send. Rowcount mismatch is unexpected under the locks;
-        // warn rather than silently dispatching tasks whose transition did not persist.
-        int marked = taskRepository.bulkMarkDispatched(tasks.stream().map(Task::getId).toList());
+        // Single bulk UPDATE for the whole tick (the rows are locked by this transaction).
+        // Deterministic lock order (P1): sorted ids, then counts and virtual time in key
+        // order, so concurrent ticks block on each other but can never deadlock. Rowcount
+        // mismatch is unexpected under the locks; warn rather than silently dispatching
+        // tasks whose transition did not persist.
+        List<UUID> ids = tasks.stream().map(Task::getId).sorted().toList();
+        int marked = taskRepository.bulkMarkDispatched(ids);
         if (marked != tasks.size()) {
             log.warn("Dispatch transition persisted for {}/{} locked tasks", marked, tasks.size());
         }
-        Map<String, Integer> increments = new LinkedHashMap<>();
+        Map<String, Integer> increments = new TreeMap<>();
         for (Task task : tasks) {
             increments.merge(task.getFairnessKey(), 1, Integer::sum);
             cms.add(task.getFairnessKey(), 1);
-            remoteExecutor.send(task.getId(), task.getPayload(), null);
         }
         increments.forEach(clientCounts::incrementInFlight);
         boolean aged = hierarchicalSelection == null && agingService.isEnabled();
         virtualTimeService.recordDispatch(tasks, task -> aged ? agingService.credit(task, now) : 0.0);
         if (hierarchicalSelection != null) {
             hierarchicalDispatchPlanner.recordDispatch(hierarchicalSelection);
+        }
+        // Sends fire after commit, never inside the transaction: a rolled-back tick must
+        // not have sent anything (the executor would run tasks the DB never dispatched).
+        // Registered last so a throwing executor cannot skip the accounting hooks above.
+        // Without an active transaction (plain unit-test calls) send immediately.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            List<Task> confirmed = new ArrayList<>(tasks);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    confirmed.forEach(task ->
+                        remoteExecutor.send(task.getId(), task.getPayload(), null));
+                }
+            });
+        } else {
+            tasks.forEach(task -> remoteExecutor.send(task.getId(), task.getPayload(), null));
         }
 
         log.debug("Dispatched {} tasks; global in-flight was {}", tasks.size(), globalInFlight);

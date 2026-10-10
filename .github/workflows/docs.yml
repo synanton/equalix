@@ -51,9 +51,11 @@ jobs:
 
       - name: Check links
         # Standalone mode (not a backend): mdbook-linkcheck 0.7.x cannot parse
-        # mdbook 0.5.4's render context, so it runs against the built HTML instead.
+        # mdbook 0.5.4's render context, so it checks the source tree directly.
+        # Takes the book root (with src/SUMMARY.md), not the rendered output.
         # Fails the workflow on broken intra-book links; web links are not followed.
-        run: mdbook-linkcheck --standalone docs/book
+        run: mdbook-linkcheck --standalone .
+        working-directory: docs
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
