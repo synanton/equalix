@@ -604,6 +604,25 @@ Two measurement corrections worth recording:
   delta). Dispatch (−99% statements, ~13× wall) and ack (−50%) are far outside noise; the
   totals agree with the counts.
 
+Multi-tenant concurrent leg (`measureMultiTenantConcurrent`: 10 tenants × 40 tasks, 4
+competing dispatchers, plus 10 sequential tasks). Two runs, statements deterministic:
+
+| Phase | Run 1 (ms/stmts) | Run 2 (ms/stmts) |
+|---|---|---|
+| Ingest 400 | 230 / 400 | 417 / 400 |
+| Calc 400 | 870 / 804 | 982 / 804 |
+| Dispatch 400 (4 threads) | 83 / 142 | 96 / 160 |
+| Ack 400 | 134 / 400 | 219 / 400 |
+| Complete 400 | 405 / 1200 | 573 / 1200 |
+| Sequential 10 (ingest/calc/dispatch/complete) | 10/24/69/50 ms, 20/34/61/60 stmts | 26/29/76/62 ms, same stmts |
+| Dispatch latency p50 / p95 / p99 | 1018 / 1142 / 1143 ms | 1243 / 1418 / 1427 ms |
+| **Total 410 tasks** | **1875 ms / 3121 (7.6/task)** | **2480 ms / 3139 (7.7/task)** |
+
+Dispatch statements vary slightly run to run (142 vs 160) because competing threads split
+the backlog into a tick count that depends on interleaving — fixed per-tick costs, not
+per-task, so the per-task rate is stable. Latencies are dominated by the calc phase
+preceding dispatch (single-threaded tagging of 400 tasks), not by dispatch itself.
+
 Deliberately unchanged: `reserveFinishTag` (one cheap PK upsert per task on a tiny table;
 batching would break consecutive tag assignment), `totalInFlight` (one `SUM` over the tiny
 `client_counts`), watchdog GROUP BY (every 5 min, partial-indexed), CMS local path (no DB).
