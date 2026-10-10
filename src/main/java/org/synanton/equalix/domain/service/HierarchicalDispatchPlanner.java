@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.Nullable;
@@ -79,9 +80,11 @@ public class HierarchicalDispatchPlanner {
         HierarchicalSelector.Plan plan = selection.plan();
         Map<String, Double> charges = HierarchicalSelector.charges(asWeightedKeys(selection.tasks()), plan,
             hierarchy, queueProperties.getVirtualTime().getQuantum());
-        charges.forEach((nodeKey, delta) ->
+        // Key order, like every other multi-row write in a tick: concurrent ticks block
+        // instead of deadlocking (P1).
+        new TreeMap<>(charges).forEach((nodeKey, delta) ->
             hierarchyStateRepository.chargeVirtualTime(nodeKey, plan.nodeFloors().getOrDefault(nodeKey, 0.0), delta));
-        plan.childrenFloors().forEach(hierarchyStateRepository::raiseChildrenFloor);
+        new TreeMap<>(plan.childrenFloors()).forEach(hierarchyStateRepository::raiseChildrenFloor);
         selection.tasks().forEach(this::countDispatch);
     }
 

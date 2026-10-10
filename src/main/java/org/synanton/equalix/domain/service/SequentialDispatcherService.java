@@ -3,10 +3,13 @@ package org.synanton.equalix.domain.service;
 import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.synanton.equalix.domain.model.ClientSequenceState;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
@@ -77,9 +80,24 @@ public class SequentialDispatcherService {
 
         cms.add(state.getFairnessKey(), 1);
         clientCounts.incrementInFlight(state.getFairnessKey());
-        remoteExecutor.send(nextTask.getId(), nextTask.getPayload(), previousResult);
         virtualTimeService.recordDispatch(List.of(nextTask));
         hierarchicalDispatchPlanner.recordSequentialDispatch(nextTask);
+
+        // After commit, like the flat dispatcher (P1): a rolled-back tick must not send.
+        // Registered after the accounting above so a throwing executor cannot skip it.
+        UUID taskId = nextTask.getId();
+        byte[] payload = nextTask.getPayload();
+        final byte[] attachedResult = previousResult;
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    remoteExecutor.send(taskId, payload, attachedResult);
+                }
+            });
+        } else {
+            remoteExecutor.send(taskId, payload, attachedResult);
+        }
 
         log.debug("Dispatched sequential task {} seq={} for client {}",
             nextTask.getId(), nextTask.getSequenceNumber(), state.getFairnessKey());

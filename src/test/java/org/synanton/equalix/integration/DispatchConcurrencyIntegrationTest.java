@@ -85,7 +85,17 @@ class DispatchConcurrencyIntegrationTest extends BaseIntegrationTest {
             })
             .toList();
         try {
-            pool.invokeAll(ticks);
+            // Retrieve every future: a tick that dies (e.g. deadlock abort) must fail
+            // loudly here. Swallowing it would record sends for rolled-back transitions
+            // and frame a lock failure as a phantom dispatch bug.
+            for (java.util.concurrent.Future<Void> tick : pool.invokeAll(ticks)) {
+                tick.get(2, TimeUnit.MINUTES);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            throw new IllegalStateException("dispatch tick failed under contention", e);
         } finally {
             pool.shutdown();
             assertThat(pool.awaitTermination(2, TimeUnit.MINUTES)).isTrue();

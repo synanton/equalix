@@ -267,9 +267,11 @@ Scheduled every `app.queue.dispatcher-interval` (default 50ms) under `@Scheduler
    cannot be stored in `priority`.
 4. Mark all selected tasks `DISPATCHED` with one bulk `UPDATE` (the rows are locked by
    this transaction; version is bumped inline so concurrent holders still fail fast).
-   Then, per task: increment CMS (+1) and call `RemoteExecutorPort.send()`. `client_counts`
+   Then, per task: increment CMS (+1). `client_counts`
    increments are aggregated per fairness key — one `UPDATE … + delta` per key, not per task.
-   See §10.5.
+   `RemoteExecutorPort.send()` fires **after commit** (registered synchronization), never
+   inside the transaction: a rolled-back tick must not have sent anything the DB never
+   dispatched. See §10.5.
 5. Advance `T_k` of each dispatched key to its highest dispatched finish tag. Advance the system
    virtual time `V` to the highest aged position `tag − A(W)`, so a task promoted by aging does not
    drag `V` ahead of the backlog. The sequential dispatcher does the same without aging.
@@ -554,6 +556,11 @@ measurements.
   all lock traffic (~140 statements/s at default cadences); never disable it with 2+ instances.
 - **Dispatcher query** - `SELECT ... FOR UPDATE SKIP LOCKED` safely partitions candidate tasks
   under concurrent dispatchers.
+- **Deterministic lock order** - every multi-row write in a tick runs in a fixed order
+  (sorted task ids, then counts and virtual time in key order), so concurrent ticks block
+  on each other but cannot deadlock. Residual cross-shape races (e.g. calculator
+  virtual-time-then-tasks vs dispatcher tasks-then-virtual-time) retry boundedly via
+  `TransientRetry` in the tick schedulers; ticks are idempotent, so replay is safe.
 - **CMS (local)** - `synchronized` on the sketch instance, sufficient for the update pattern
   observed. Higher-concurrency deployments can switch to `StampedLock` for read/write
   separation.
@@ -623,9 +630,25 @@ the backlog into a tick count that depends on interleaving — fixed per-tick co
 per-task, so the per-task rate is stable. Latencies are dominated by the calc phase
 preceding dispatch (single-threaded tagging of 400 tasks), not by dispatch itself.
 
+Retest after the P1 hardening (deterministic lock order, after-commit sends, scheduler
+retry): statement counts identical (2811 single-tenant, 3121 multi-tenant — the hardening
+adds zero statements, as designed). Wall-clock on a quiet host, two runs: single-tenant
+totals 1748/1789 ms; multi-tenant totals 1320/1332 ms at 7.6 stmts/task with dispatch
+p50 ≈ 660 ms. No performance regression from the concurrency fixes.
+
 Deliberately unchanged: `reserveFinishTag` (one cheap PK upsert per task on a tiny table;
 batching would break consecutive tag assignment), `totalInFlight` (one `SUM` over the tiny
 `client_counts`), watchdog GROUP BY (every 5 min, partial-indexed), CMS local path (no DB).
+
+Concurrency hardening (P1): multi-row writes in a tick run in deterministic order (sorted
+task ids, then counts and virtual time in key order), so concurrent ticks block rather than
+deadlock; residual cross-shape races retry boundedly in the tick schedulers (`TransientRetry`,
+pessimistic lock failures only — ticks are idempotent). Executor sends fire after commit,
+so a rolled-back tick never sent anything the DB never dispatched; without an active
+transaction (plain unit-test calls) sends fire immediately. `DispatchConcurrencyIntegrationTest`
+pins this live: 4 competing dispatchers over 200 tasks dispatch each exactly once with exact
+counter accounting, duplicate completions decrement once, and a timeout sweep after completion
+leaves the terminal row untouched.
 
 ---
 

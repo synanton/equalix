@@ -15,6 +15,6 @@ public class DispatcherScheduler {
     @Scheduled(fixedDelayString = "${app.queue.dispatcher-interval}")
     @SchedulerLock(name = "dispatcher", lockAtMostFor = "5s", lockAtLeastFor = "25ms")
     public void run() {
-        dispatcherService.dispatch();
+        TransientRetry.run("dispatcher", dispatcherService::dispatch);
     }
 }
